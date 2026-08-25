@@ -1,0 +1,264 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>无极 — 设置</title>
+  <style>
+    *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+    :root{
+      --bg-page:#f8f9fb;--bg-sidebar:#ffffff;--bg-content:#ffffff;--bg-input:#f1f3f9;
+      --bg-hover:rgba(99,102,241,0.04);--text-primary:#1a1a2e;--text-secondary:#6b7280;
+      --text-tertiary:#9ca3af;--accent:#6366f1;--accent-hover:#4f46e5;
+      --accent-soft:rgba(99,102,241,0.08);--accent-light:#a5b4fc;--success:#10b981;
+      --danger:#ef4444;--warning:#f59e0b;--border:rgba(0,0,0,0.08);
+      --border-hover:rgba(0,0,0,0.14);--radius:10px;--radius-lg:16px;--radius-xl:50px;
+      --shadow-sm:0 1px 3px rgba(0,0,0,0.04);--shadow-card:0 2px 12px rgba(0,0,0,0.04);
+      --transition:0.2s cubic-bezier(0.4,0,0.2,1);
+    }
+    body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"PingFang SC","Microsoft YaHei",sans-serif;font-size:14px;color:var(--text-primary);background:var(--bg-page);height:100vh;display:flex;overflow:hidden;-webkit-font-smoothing:antialiased;}
+    .sidebar{width:220px;flex-shrink:0;background:var(--bg-sidebar);border-right:1px solid var(--border);display:flex;flex-direction:column;padding:20px 0;overflow-y:auto;}
+    .sidebar .brand{padding:0 20px 18px;display:flex;align-items:center;gap:10px;}
+    .sidebar .brand .logo{width:36px;height:36px;border-radius:10px;background:linear-gradient(135deg,#6366f1,#8b5cf6);display:flex;align-items:center;justify-content:center;flex-shrink:0;}
+    .sidebar .brand .logo svg{width:18px;height:18px;stroke:#fff;fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
+    .sidebar .brand .name{font-size:16px;font-weight:700;color:var(--text-primary);}
+    .sidebar .brand .ver{font-size:10px;color:var(--text-tertiary);}
+    .sidebar .nav{margin-top:8px;flex:1;}
+    .sidebar .nav-item{display:flex;align-items:center;gap:10px;padding:10px 20px;margin:1px 8px;border-radius:8px;font-size:13px;font-weight:500;color:var(--text-secondary);cursor:pointer;transition:all var(--transition);border:none;background:none;width:calc(100% - 16px);text-align:left;font-family:inherit;}
+    .sidebar .nav-item:hover{background:var(--bg-hover);color:var(--text-primary);}
+    .sidebar .nav-item.active{background:var(--accent-soft);color:var(--accent);font-weight:600;}
+    .sidebar .nav-item .icon{width:18px;height:18px;display:flex;align-items:center;justify-content:center;}
+    .sidebar .nav-item .icon svg{width:16px;height:16px;stroke:currentColor;fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
+    .sidebar .nav-divider{margin:8px 16px;border:none;border-top:1px solid var(--border);}
+    .content{flex:1;overflow-y:auto;padding:32px 40px;}
+    .content .section{display:none;}
+    .content .section.active{display:block;max-width:580px;}
+    .section-title{font-size:20px;font-weight:700;color:var(--text-primary);margin-bottom:6px;}
+    .section-desc{font-size:13px;color:var(--text-secondary);margin-bottom:24px;}
+    .form-group{margin-bottom:18px;}
+    .form-group label{display:block;font-size:12px;font-weight:600;color:var(--text-secondary);margin-bottom:6px;}
+    .form-group input,.form-group select,.form-group textarea{width:100%;padding:10px 14px;border-radius:var(--radius);border:1px solid var(--border);background:var(--bg-input);color:var(--text-primary);font-size:13px;font-family:inherit;outline:none;transition:all var(--transition);}
+    .form-group input:focus,.form-group select:focus,.form-group textarea:focus{border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-soft);}
+    .form-group select{cursor:pointer;appearance:none;-webkit-appearance:none;background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%236b7280' stroke-width='2'%3E%3Cpolyline points='6 9 12 15 18 9'/%3E%3C/svg%3E");background-repeat:no-repeat;background-position:right 12px center;padding-right:36px;}
+    .toggle-row{display:flex;align-items:center;justify-content:space-between;padding:10px 0;}
+    .toggle-row .toggle-label{font-size:13px;font-weight:500;color:var(--text-primary);}
+    .toggle{width:44px;height:24px;border-radius:12px;background:#d1d5db;cursor:pointer;position:relative;transition:background var(--transition);}
+    .toggle.on{background:var(--accent);}
+    .toggle::after{content:'';position:absolute;top:2px;left:2px;width:20px;height:20px;border-radius:50%;background:#fff;transition:transform var(--transition);}
+    .toggle.on::after{transform:translateX(20px)}
+    .btn{padding:10px 20px;border-radius:var(--radius);border:none;font-size:13px;font-weight:600;cursor:pointer;font-family:inherit;transition:all var(--transition);display:inline-flex;align-items:center;gap:6px;}
+    .btn-primary{background:var(--accent);color:#fff;}
+    .btn-primary:hover{background:var(--accent-hover);}
+    .btn-outline{background:transparent;color:var(--accent);border:1px solid var(--accent);}
+    .btn-outline:hover{background:var(--accent-soft);}
+    .btn-danger{background:rgba(239,68,68,0.08);color:var(--danger);border:1px solid rgba(239,68,68,0.2);}
+    .btn-danger:hover{background:rgba(239,68,68,0.15);}
+    .btn-sm{padding:6px 14px;font-size:12px;}
+    .btn-row{display:flex;gap:10px;margin-top:16px;}
+    .status-msg{margin-top:10px;padding:10px 14px;border-radius:var(--radius);font-size:12px;display:none;}
+    .status-msg.show{display:block;}
+    .status-msg.success{background:rgba(16,185,129,0.08);color:var(--success);border:1px solid rgba(16,185,129,0.15);}
+    .status-msg.error{background:rgba(239,68,68,0.08);color:var(--danger);border:1px solid rgba(239,68,68,0.15);}
+    .status-msg.info{background:var(--accent-soft);color:var(--accent);border:1px solid rgba(99,102,241,0.15);}
+    .stats{display:flex;gap:10px;margin-bottom:16px;}
+    .stat-card{flex:1;text-align:center;padding:14px 8px;border-radius:var(--radius);border:1px solid var(--border);}
+    .stat-card .num{font-size:24px;font-weight:700;}
+    .stat-card .label{font-size:11px;color:var(--text-tertiary);margin-top:3px;}
+    .filter-list-item{display:flex;align-items:center;gap:10px;padding:10px 14px;margin-bottom:6px;border-radius:var(--radius);border:1px solid var(--border);background:var(--bg-input);}
+    .filter-list-item .list-name{flex:1;font-size:13px;font-weight:500;}
+    .filter-list-item .list-desc{font-size:11px;color:var(--text-tertiary);}
+  </style>
+</head>
+<body>
+  <div class="sidebar">
+    <div class="brand">
+      <div class="logo"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg></div>
+      <div><div class="name">无极</div><div class="ver">v3.3.0</div></div>
+    </div>
+    <div class="nav">
+      <button class="nav-item active" data-section="sec-llm"><span class="icon"><svg viewBox="0 0 24 24"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg></span> 语言模型</button>
+      <button class="nav-item" data-section="sec-vision"><span class="icon"><svg viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg></span> 视觉模型</button>
+      <button class="nav-item" data-section="sec-translate"><span class="icon"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg></span> 网页翻译</button>
+      <button class="nav-item" data-section="sec-kb"><span class="icon"><svg viewBox="0 0 24 24"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/></svg></span> 知识库 V2</button>
+      <button class="nav-item" data-section="sec-adblock"><span class="icon"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><line x1="4.93" y1="4.93" x2="19.07" y2="19.07"/></svg></span> 广告过滤</button>
+      <button class="nav-item" data-section="sec-agent"><span class="icon"><svg viewBox="0 0 24 24"><path d="M12 2l9 4.5v3.5c0 5.25-3.5 10.15-9 11.5-5.5-1.35-9-6.25-9-11.5V6.5L12 2z"/></svg></span> Agent 权限</button>
+      <button class="nav-item" data-section="sec-suspend"><span class="icon"><svg viewBox="0 0 24 24"><path d="M8 3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h3M12 3h7a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-7M12 3v18"/></svg></span> 标签页休眠</button>
+      <button class="nav-item" data-section="sec-cache"><span class="icon"><svg viewBox="0 0 24 24"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg></span> 聊天与重置</button>
+      <hr class="nav-divider">
+      <button class="nav-item" data-section="sec-about"><span class="icon"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg></span> 关于</button>
+    </div>
+  </div>
+
+  <div class="content">
+    <!-- 语言模型 -->
+    <div class="section active" id="sec-llm">
+      <div class="section-title">📡 语言模型</div>
+      <div class="section-desc">文本对话与推理，所有 AI 功能共用此配置</div>
+      <div class="form-group"><label>服务商</label><select id="provider-select"><optgroup label="国内"><option value="deepseek">DeepSeek</option><option value="qwen">阿里 · 通义千问</option><option value="zhipu">智谱 · GLM</option><option value="moonshot">月之暗面 · Kimi</option><option value="spark">讯飞 · 星火</option><option value="yi">零一万物 · Yi</option><option value="wenxin">百度 · 文心一言</option><option value="minimax">MiniMax</option><option value="baichuan">百川智能</option><option value="stepfun">阶跃星辰</option><option value="siliconflow">硅基流动</option></optgroup><optgroup label="国外"><option value="openai">OpenAI</option><option value="claude">Anthropic · Claude</option><option value="groq">Groq</option><option value="mistral">Mistral</option><option value="cohere">Cohere</option><option value="perplexity">Perplexity</option></optgroup><optgroup label="其他"><option value="custom">自定义服务商</option></optgroup></select></div>
+      <div class="form-group"><label>API Key</label><input type="password" id="api-key" placeholder="sk-xxxx" autocomplete="off"><div class="hint">密钥仅存储在本机</div></div>
+      <div class="form-group"><label>模型</label><input type="text" id="model-input" placeholder="deepseek-chat" autocomplete="off"><div class="hint" id="model-hint">选择服务商后可见常用模型</div></div>
+      <div class="form-group"><label>API Base URL</label><input type="url" id="base-url" placeholder="https://api.deepseek.com" autocomplete="off"><div class="hint">通常无需修改</div></div>
+      <div class="btn-row"><button class="btn btn-primary" id="save-llm-btn">保存</button><button class="btn btn-outline" id="test-llm-btn">测试连接</button></div>
+      <div class="status-msg" id="llm-status"></div>
+    </div>
+
+    <!-- 视觉模型 -->
+    <div class="section" id="sec-vision">
+      <div class="section-title">👁 视觉模型</div>
+      <div class="section-desc">图片识别、OCR 与视觉分析</div>
+      <div class="form-group"><label>服务商</label><select id="vision-provider-select"><optgroup label="国内"><option value="zhipu">智谱 AI</option><option value="qwen">阿里 · 通义千问</option><option value="moonshot">月之暗面 · Kimi</option><option value="stepfun">阶跃星辰</option></optgroup><optgroup label="国外"><option value="openai">OpenAI</option><option value="gemini">Google · Gemini</option><option value="claude">Anthropic · Claude</option></optgroup><optgroup label="其他"><option value="custom">自定义</option></optgroup></select></div>
+      <div class="form-group"><label>API Key</label><input type="password" id="vision-api-key" placeholder="视觉模型 API Key" autocomplete="off"><div class="hint">可留空复用语言模型密钥</div></div>
+      <div class="form-group"><label>模型</label><input type="text" id="vision-model-input" placeholder="glm-4.6v-flash" autocomplete="off"></div>
+      <div class="form-group"><label>API Base URL</label><input type="url" id="vision-base-url" placeholder="https://open.bigmodel.cn/api/paas" autocomplete="off"></div>
+      <div class="btn-row"><button class="btn btn-primary" id="save-vision-btn">保存</button><button class="btn btn-outline" id="test-vision-btn">测试连接</button></div>
+      <div class="status-msg" id="vision-status"></div>
+    </div>
+
+    <!-- 网页翻译 -->
+    <div class="section" id="sec-translate">
+      <div class="section-title">🌐 网页翻译</div>
+      <div class="section-desc">沉浸式双语对照翻译，使用语言模型 API</div>
+      <div class="toggle-row"><span class="toggle-label">鼠标悬停翻译</span><div class="toggle on" id="tran-hover-toggle"></div></div>
+      <div class="toggle-row"><span class="toggle-label">输入框翻译</span><div class="toggle" id="tran-input-toggle"></div></div>
+      <div class="form-group"><label>目标语言</label><select id="tran-target-lang"><option value="zh-CN">简体中文</option><option value="zh-TW">繁体中文</option><option value="en">English</option><option value="ja">日本語</option><option value="ko">한국어</option><option value="fr">Français</option><option value="de">Deutsch</option><option value="es">Español</option></select></div>
+      <div class="form-group"><label>显示模式</label><select id="tran-display-mode"><option value="bilingual">双语对照（上原文下译文）</option><option value="translation">仅显示译文</option></select></div>
+      <div class="form-group"><label>译文颜色</label><input type="color" id="tran-color" value="#6366f1"></div>
+      <div class="form-group"><label>译文字号</label><select id="tran-font-size"><option value="12px">12px</option><option value="13px" selected>13px</option><option value="14px">14px</option><option value="15px">15px</option></select></div>
+      <div class="form-group"><label>翻译引擎服务商</label><select id="tran-provider-select"><optgroup label="国内"><option value="deepseek">DeepSeek</option><option value="qwen">阿里 · 通义千问</option><option value="zhipu">智谱 · GLM</option><option value="moonshot">月之暗面 · Kimi</option><option value="spark">讯飞 · 星火</option><option value="yi">零一万物 · Yi</option><option value="wenxin">百度 · 文心一言</option><option value="minimax">MiniMax</option><option value="baichuan">百川智能</option><option value="stepfun">阶跃星辰</option><option value="siliconflow">硅基流动</option></optgroup><optgroup label="国外"><option value="openai">OpenAI</option><option value="claude">Anthropic · Claude</option><option value="groq">Groq</option><option value="mistral">Mistral</option><option value="cohere">Cohere</option><option value="perplexity">Perplexity</option></optgroup><optgroup label="其他"><option value="custom">自定义服务商</option></optgroup></select></div>
+      <div class="form-group"><label>翻译 API Key</label><input type="password" id="tran-api-key" placeholder="翻译专用 API Key（留空复用语言模型）" autocomplete="off"><div class="hint">留空则使用语言模型的 API Key</div></div>
+      <div class="form-group"><label>翻译模型</label><input type="text" id="tran-model-input" placeholder="如 deepseek-chat" autocomplete="off"><div class="hint">推荐使用性价比高的模型，如 deepseek-chat</div></div>
+      <div class="form-group"><label>翻译 API Base URL</label><input type="url" id="tran-base-url" placeholder="https://api.deepseek.com" autocomplete="off"><div class="hint">通常无需修改</div></div>
+      <div class="btn-row"><button class="btn btn-primary" id="save-tran-btn">保存全部翻译设置</button><button class="btn btn-outline" id="test-tran-api-btn">测试翻译 API</button></div>
+      <div class="btn-row" style="margin-top:8px;"><button class="btn btn-outline" id="clear-tran-cache-btn">清空翻译缓存</button></div>
+      <div class="status-msg" id="tran-status"></div>
+    </div>
+
+    <!-- 知识库 -->
+    <div class="section" id="sec-kb">
+      <div class="section-title">📚 知识库</div>
+      <div class="section-desc">已保存的网页、对话和文件</div>
+      <div class="stats">
+        <div class="stat-card" style="background:rgba(99,102,241,0.04);"><div class="num" style="color:var(--accent-light);" id="stat-pages">-</div><div class="label">网页</div></div>
+        <div class="stat-card" style="background:rgba(16,185,129,0.04);"><div class="num" style="color:var(--success);" id="stat-chats">-</div><div class="label">对话</div></div>
+        <div class="stat-card" style="background:rgba(245,158,11,0.04);"><div class="num" style="color:var(--warning);" id="stat-files">-</div><div class="label">文件</div></div>
+      </div>
+      <div class="btn-row"><button class="btn btn-outline btn-sm" id="clear-pages-btn">清空网页</button><button class="btn btn-outline btn-sm" id="clear-chats-btn">清空对话</button><button class="btn btn-danger btn-sm" id="clear-all-kb-btn">清空全部知识库</button></div>
+      <div class="status-msg" id="kb-status"></div>
+    </div>
+
+    <!-- 广告过滤 -->
+    <div class="section" id="sec-adblock">
+      <div class="section-title">🛡 广告过滤</div>
+      <div class="section-desc">基于 EasyList China 规则 + AI 智能增强，自动拦截广告</div>
+
+      <div class="toggle-row"><span class="toggle-label">启用广告过滤</span><div class="toggle on" id="adblock-enabled-toggle"></div></div>
+
+      <div class="stats" style="margin-top:24px;">
+        <div class="stat-card" style="background:rgba(99,102,241,0.04);"><div class="num" style="color:var(--accent);" id="adblock-dnr-num">-</div><div class="label">DNR 网络规则</div></div>
+        <div class="stat-card" style="background:rgba(16,185,129,0.04);"><div class="num" style="color:var(--success);" id="adblock-css-num">-</div><div class="label">CSS 隐藏规则</div></div>
+      </div>
+
+      <div style="margin-top:20px;font-size:12px;color:var(--text-tertiary);" id="adblock-updated-at">最后更新：--</div>
+
+      <div class="form-group" style="margin-top:20px;"><label>过滤器规则列表</label></div>
+      <div id="filter-lists-container">
+        <div style="padding:20px;text-align:center;color:var(--text-tertiary);">加载中...</div>
+      </div>
+
+      <div class="btn-row">
+        <button class="btn btn-primary" id="adblock-update-btn">立即更新规则</button>
+        <button class="btn btn-outline" id="adblock-clear-btn">清除所有规则</button>
+      </div>
+
+      <hr style="margin:24px 0 16px;border:none;border-top:1px solid var(--border);">
+      <div class="section-title" style="font-size:15px;">📋 网站白名单</div>
+      <div class="section-desc">白名单内的网站不会屏蔽广告，适合信任的网站或依赖广告的平台</div>
+
+      <div class="form-group" style="display:flex;gap:8px;align-items:flex-end;">
+        <div style="flex:1;"><label>添加网站域名</label>
+          <input type="text" id="adblock-wl-input" placeholder="例如: youtube.com 或 bilibili.com" autocomplete="off">
+        </div>
+        <button class="btn btn-primary btn-sm" id="adblock-wl-add-btn" style="margin-bottom:0;">添加</button>
+      </div>
+      <div class="form-group">
+        <label id="adblock-wl-count" style="color:var(--text-tertiary);">当前白名单：0 个网站</label>
+      </div>
+      <div id="adblock-wl-list" style="max-height:240px;overflow-y:auto;"></div>
+      <div class="btn-row" style="margin-top:6px;">
+        <button class="btn btn-outline btn-sm" id="adblock-wl-current-btn">添加当前网站</button>
+        <button class="btn btn-danger btn-sm" id="adblock-wl-clear-btn">清空白名单</button>
+      </div>
+
+      <div class="status-msg" id="adblock-status"></div>
+    </div>
+
+    <!-- Agent 权限 -->
+    <div class="section" id="sec-agent">
+      <div class="section-title">🛡 Agent 权限</div>
+      <div class="section-desc">控制 AI Agent 可以执行的操作范围</div>
+      <div class="toggle-row"><span class="toggle-label">管理文件夹/标签</span><div class="toggle on" id="agent-can-manage-folders"></div></div>
+      <div class="toggle-row"><span class="toggle-label">分析内容</span><div class="toggle on" id="agent-can-parse-content"></div></div>
+      <div class="toggle-row"><span class="toggle-label">网页搜索</span><div class="toggle on" id="agent-can-web-search"></div></div>
+      <div class="toggle-row"><span class="toggle-label">执行命令（需审批）</span><div class="toggle" id="agent-can-execute-commands"></div></div>
+      <div class="toggle-row"><span class="toggle-label">自动标签</span><div class="toggle" id="agent-auto-tag"></div></div>
+      <div class="btn-row"><button class="btn btn-primary" id="save-agent-perms-btn">保存权限</button></div>
+      <div class="status-msg" id="agent-status"></div>
+    </div>
+
+    <!-- 标签页休眠 -->
+    <div class="section" id="sec-suspend">
+      <div class="section-title">💤 标签页休眠</div>
+      <div class="section-desc">自动暂停未使用的标签页，释放系统资源，优化浏览器性能</div>
+
+      <div class="toggle-row"><span class="toggle-label">启用自动休眠</span><div class="toggle on" id="suspend-enabled-toggle"></div></div>
+
+      <div class="form-group" style="margin-top:20px;"><label>休眠等待时间</label><select id="suspend-time-select">
+        <option value="1">1 分钟</option>
+        <option value="5">5 分钟</option>
+        <option value="10">10 分钟</option>
+        <option value="20">20 分钟</option>
+        <option value="30">30 分钟</option>
+        <option value="60" selected>1 小时</option>
+        <option value="120">2 小时</option>
+        <option value="240">4 小时</option>
+        <option value="720">12 小时</option>
+        <option value="0">从不</option>
+      </select></div>
+
+      <div class="toggle-row"><span class="toggle-label">不休眠固定标签页</span><div class="toggle on" id="suspend-pinned-toggle"></div></div>
+      <div class="toggle-row"><span class="toggle-label">不休眠播放音频的标签页</span><div class="toggle on" id="suspend-audible-toggle"></div></div>
+      <div class="toggle-row"><span class="toggle-label">不休眠有表单输入的标签页</span><div class="toggle on" id="suspend-forms-toggle"></div></div>
+      <div class="toggle-row"><span class="toggle-label">不休眠当前活跃标签页</span><div class="toggle on" id="suspend-active-toggle"></div></div>
+      <div class="toggle-row"><span class="toggle-label">点击休眠标签页时自动恢复</span><div class="toggle" id="suspend-focus-toggle"></div></div>
+
+      <div class="form-group" style="margin-top:20px;"><label>白名单（每行一个网址或正则表达式，匹配的页面不会自动休眠）</label>
+        <textarea id="suspend-whitelist" rows="5" placeholder="example.com
+/\.gov\.cn$/"></textarea>
+      </div>
+
+      <div class="btn-row"><button class="btn btn-primary" id="save-suspend-btn">保存设置</button></div>
+      <div class="status-msg" id="suspend-status"></div>
+    </div>
+
+    <!-- 聊天与重置 -->
+    <div class="section" id="sec-cache">
+      <div class="section-title">💬 聊天缓存与重置</div>
+      <div class="section-desc">管理聊天记录及重置配置</div>
+      <div class="btn-row"><button class="btn btn-outline" id="clear-chat-cache-btn">清空聊天记录</button><button class="btn btn-danger" id="reset-all-btn">重置全部配置</button></div>
+      <div class="status-msg" id="cache-status"></div>
+    </div>
+
+    <!-- 关于 -->
+    <div class="section" id="sec-about">
+      <div class="section-title">ℹ️ 关于无极</div>
+      <div class="section-desc">无极 — 智能 AI 浏览器助手</div>
+      <div style="font-size:13px;color:var(--text-secondary);line-height:2;">
+        <div>版本：v3.3.0</div>
+        <div>功能：AI 对话 · 沉浸式网页翻译 · 图片识别 · 视频摘要 · PDF 保存 · 知识库 V2 · 全文搜索 · 标签系统 · 高亮批注 · 知识图谱 · AI Agent · 广告过滤 · 标签页休眠</div>
+        <div>技术栈：Manifest V3 · Shadow DOM · IndexedDB · FTS 倒排索引 · RAG · OpenAI Compatible API · DNR</div>
+      </div>
+    </div>
+  </div>
+  <script src="options.js"></script>
+</body>
+</html>

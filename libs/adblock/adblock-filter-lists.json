@@ -1,0 +1,38 @@
+{
+  "lists": [
+    {
+      "id": "easylist_china",
+      "name": "EasyList China",
+      "description": "中文网站广告过滤规则",
+      "url": "https://easylist-downloads.adblockplus.org/easylistchina.txt",
+      "enabled": true,
+      "category": "ads"
+    },
+    {
+      "id": "cjx_annoyance",
+      "name": "CJX's Annoyance List",
+      "description": "中文网站自我推广/弹窗过滤",
+      "url": "https://raw.githubusercontent.com/cjx82630/cjxlist/master/cjx-annoyance.txt",
+      "enabled": true,
+      "category": "annoyance"
+    },
+    {
+      "id": "easylist",
+      "name": "EasyList",
+      "description": "国际通用广告过滤规则",
+      "url": "https://easylist-downloads.adblockplus.org/easylist.txt",
+      "enabled": false,
+      "category": "ads"
+    },
+    {
+      "id": "anti_adblock",
+      "name": "Anti-Adblock Killer",
+      "description": "反反广告屏蔽规则",
+      "url": "https://raw.githubusercontent.com/reek/anti-adblock-killer/master/anti-adblock-killer-filters.txt",
+      "enabled": false,
+      "category": "anti_circumvention"
+    }
+  ],
+  "lastUpdate": 0,
+  "updateInterval": 86400000
+}

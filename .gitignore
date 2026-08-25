@@ -1,0 +1,20 @@
+# WorkBuddy 项目数据（勿提交）
+.workbuddy/
+
+# 系统文件
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# IDE / 编辑器
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# 日志
+*.log
+npm-debug.log*
+
+# 依赖
+node_modules/

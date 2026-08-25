@@ -1,0 +1,71 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title id="pageTitle">已休眠</title>
+  <link id="favicon" rel="icon" href="../icons/icon-16.png">
+  <style>
+    *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+    body{
+      font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","Inter",Roboto,"PingFang SC","Microsoft YaHei",sans-serif;
+      background:linear-gradient(135deg,#f8f9fb 0%,#eef0f6 100%);
+      display:flex;flex-direction:column;align-items:center;justify-content:center;
+      min-height:100vh;color:#1a1a2e;cursor:pointer;
+      -webkit-font-smoothing:antialiased;user-select:none;
+    }
+    .card{
+      background:#fff;border-radius:20px;box-shadow:0 8px 40px rgba(20,20,40,0.08);
+      padding:40px 48px;text-align:center;max-width:520px;width:90%;
+      transition:transform 0.2s,box-shadow 0.2s;position:relative;z-index:2;
+    }
+    .card:hover{transform:translateY(-2px);box-shadow:0 12px 48px rgba(20,20,40,0.12);}
+    .card:active{transform:scale(0.98);}
+    .icon-circle{
+      width:64px;height:64px;border-radius:50%;
+      background:linear-gradient(135deg,#6366f1,#a855f7);
+      display:flex;align-items:center;justify-content:center;
+      margin:0 auto 24px;box-shadow:0 6px 24px rgba(99,102,241,0.25);
+      animation:pulse 3s ease-in-out infinite;
+    }
+    @keyframes pulse{0%,100%{box-shadow:0 6px 24px rgba(99,102,241,0.25)}50%{box-shadow:0 6px 32px rgba(99,102,241,0.45)}}
+    .icon-circle svg{width:28px;height:28px;stroke:#fff;fill:none;stroke-width:2.5;stroke-linecap:round;stroke-linejoin:round}
+    .title-row{display:flex;align-items:center;justify-content:center;gap:10px;margin-bottom:8px;}
+    .title-row img{width:20px;height:20px;flex-shrink:0;}
+    h2{font-size:18px;font-weight:650;color:#1a1a2e;word-break:break-all;line-height:1.3;}
+    .url-text{
+      display:inline-block;font-size:12px;color:#9ca3af;margin-top:6px;
+      word-break:break-all;max-width:100%;opacity:0.8;
+    }
+    .divider-line{width:40px;height:3px;border-radius:3px;background:linear-gradient(90deg,#6366f1,#a855f7);margin:18px auto;}
+    .hint{font-size:14px;color:#6b7280;line-height:1.6;}
+    .hint strong{color:#6366f1;font-weight:600;}
+    .watermark{
+      position:fixed;bottom:18px;right:18px;font-size:10px;color:#c8c8d0;
+      display:flex;align-items:center;gap:4px;z-index:1;
+    }
+    .watermark svg{width:12px;height:12px;}
+    .ripple{position:fixed;border-radius:50%;background:rgba(99,102,241,0.08);transform:scale(0);animation:rippleEffect 0.8s ease-out;pointer-events:none;z-index:3;}
+    @keyframes rippleEffect{to{transform:scale(4);opacity:0}}
+  </style>
+</head>
+<body>
+  <div class="card" id="mainCard">
+    <div class="icon-circle">
+      <svg viewBox="0 0 24 24"><path d="M8 3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h3M12 3h7a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-7M12 3v18"/></svg>
+    </div>
+    <div class="title-row">
+      <img id="tabIcon" src="../icons/icon-16.png" alt="">
+      <h2 id="tabTitle">标签页已休眠</h2>
+    </div>
+    <div class="url-text" id="tabUrl"></div>
+    <div class="divider-line"></div>
+    <p class="hint">点击任意位置 <strong>恢复标签页</strong></p>
+  </div>
+  <div class="watermark">
+    <svg viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="8.5" stroke="#c8c8d0" stroke-width="1.4" stroke-dasharray="30 12" transform="rotate(-90 12 12)"/><path d="M6 12 A 6 6 0 0 1 18 12" stroke="#c8c8d0" stroke-width="1.2"/><circle cx="12" cy="12" r="1.2" fill="#c8c8d0"/></svg>
+     无极 · 智能标签页休眠
+  </div>
+  <script src="suspended.js"></script>
+</body>
+</html>
