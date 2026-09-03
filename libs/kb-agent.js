@@ -6,7 +6,7 @@
  *   - 工具调用事件流
  *   - RAG 引用系统
  *   - 审批流程（危险操作）
- *   - Dashboard 智能推荐
+ *   - Dashboard 推荐
  *   - 自动标签
  */
 
@@ -373,10 +373,10 @@ const AgentTools = {
     }
   },
 
-  /** 深度 DOM 监听（先等父元素出现再挂 observer） */
+  /** 深层 DOM 监听（先等父元素出现再挂 observer） */
   deep_watch: {
     name: 'deep_watch',
-    description: '深度监听动态渲染的深层子树（如 B站 #video-page-app）。先轮询等父元素出现，再挂 MutationObserver。参数：{selector:"CSS选择器", waitParentMs:10000}。之后用 get_watch_report 获取内容',
+    description: '监听动态渲染的深层子树（如 B站 #video-page-app）。先轮询等父元素出现，再挂 MutationObserver。参数：{selector:"CSS选择器", waitParentMs:10000}。之后用 get_watch_report 获取内容',
     handler: async (params) => {
       try {
         const tabId = await getActiveTabId();
@@ -391,14 +391,14 @@ const AgentTools = {
         if (resp?.success) {
           return {
             success: true,
-            summary: `深度监听已启动: ${params.selector} (ID: ${resp.data.watcherId})`,
+            summary: `深层监听已启动: ${params.selector} (ID: ${resp.data.watcherId})`,
             detail: `监听器 ID: ${resp.data.watcherId}。之后用 get_watch_report 获取最新内容。`,
             data: resp.data
           };
         }
         return { success: false, summary: resp?.error || '启动失败' };
       } catch (e) {
-        return { success: false, summary: '深度监听异常: ' + e.message };
+        return { success: false, summary: '深层监听异常: ' + e.message };
       }
     }
   },
@@ -592,10 +592,10 @@ const AgentTools = {
     }
   },
 
-  /** 自适应智能操作 */
+  /** 探测操作 */
   console_smart: {
     name: 'console_smart',
-    description: '自适应智能操作：自动检查元素是否存在，返回其 tag/type/text/value/位置。用于不确定目标时先探测。参数：{selector:"CSS选择器"}',
+    description: '探测元素：检查选择器对应的元素是否存在，返回 tag/type/text/value/位置。不确定目标时先用这个。参数：{selector:"CSS选择器"}',
     handler: async (params) => {
       try {
         const tabId = params?.tabId || await getActiveTabId();
@@ -698,7 +698,7 @@ const KBAnalysis = {
   },
 
   /**
-   * Dashboard 智能推荐（借鉴 EC AiDashboardResponse）
+   * Dashboard 推荐（借鉴 EC AiDashboardResponse）
    */
   async getDashboard() {
     const allItems = await KBItem.getAll(30);
@@ -851,7 +851,22 @@ const KBAgent = {
       }
       
       const config = result._config;
-      const messages = result._messages;
+      let messages = result._messages;
+      // 上下文预算：system 全保留 + 从尾部截取最近消息，防止工具循环导致上下文溢出
+      const trimMessages = (msgs, budgetChars = 20000) => {
+        if (!Array.isArray(msgs) || msgs.length === 0) return msgs;
+        const system = msgs.filter(m => m.role === 'system');
+        let used = system.reduce((s, m) => s + (m.content || '').length, 0);
+        const tail = [];
+        for (let i = msgs.length - 1; i >= 0; i--) {
+          if (msgs[i].role === 'system') continue;
+          const len = (msgs[i].content || '').length;
+          if (used + len > budgetChars && tail.length > 0) break;
+          used += len;
+          tail.push(msgs[i]);
+        }
+        return [...system, ...tail.reverse()];
+      };
       
       const baseUrl = config.baseUrl.replace(/\/+$/, '');
       const provider = config.provider || '';
@@ -911,33 +926,41 @@ const KBAgent = {
       const MAX_TOOL_ROUNDS = 5;
       let toolEvents = [];
       let round = 0;
-      let finalText = fullText; // 最终展示给用户的文本
-      
+      let finalText = ''; // 最终展示给用户的文本（不再预置第一轮文本，避免裸 JSON 外泄）
+
       while (round < MAX_TOOL_ROUNDS) {
         round++;
-        // 1. 检测本轮输出里是否包含工具调用（兼容单个与多个工具调用）
-        //    先剥离 markdown 代码块标记（```...``` 和单行 `...`），提高识别率
-        const stripped = fullText
-          .replace(/```(?:json)?\s*/g, '')
-          .replace(/```/g, '');
-        const toolRegex = /\{"tool"\s*:\s*"(\w+)"\s*,\s*"params"\s*:\s*(\{[\s\S]*?\})\s*\}/g;
-        const toolCalls = [];
-        let m;
-        while ((m = toolRegex.exec(stripped)) !== null) {
-          let params;
-          try { params = JSON.parse(m[2]); } catch (e) { continue; }
-          toolCalls.push({ name: m[1], params });
+        // 1. 检测本轮输出里是否包含工具调用
+        //    优先用括号配对解析器（支持嵌套 params），回退正则
+        let toolCalls = [];
+        if (typeof extractToolCallBlocks === 'function') {
+          toolCalls = extractToolCallBlocks(fullText).calls;
+        } else {
+          const stripped = fullText
+            .replace(/```(?:json)?\s*/g, '')
+            .replace(/```/g, '');
+          const toolRegex = /\{"tool"\s*:\s*"(\w+)"\s*,\s*"params"\s*:\s*(\{[\s\S]*?\})\s*\}/g;
+          let m;
+          while ((m = toolRegex.exec(stripped)) !== null) {
+            let params;
+            try { params = JSON.parse(m[2]); } catch (e) { continue; }
+            toolCalls.push({ name: m[1], params });
+          }
         }
-        
+
         // 2. 没有工具调用 → 本轮即最终答案，结束循环
         if (toolCalls.length === 0) {
           finalText = fullText;
           break;
         }
-        
-        // 3. 执行所有工具调用，收集结果
+
+        // 3. 执行所有工具调用，收集结果（同轮重复调用去重）
+        const seenCalls = new Set();
         const toolMsgs = [];
         for (const tc of toolCalls) {
+          const dedupeKey = tc.name + ':' + JSON.stringify(tc.params || {});
+          if (seenCalls.has(dedupeKey)) continue;
+          seenCalls.add(dedupeKey);
           if (!AgentTools[tc.name]) {
             toolMsgs.push(`[工具 ${tc.name} 执行结果]\n错误: 未知工具 "${tc.name}"`);
             continue;
@@ -962,15 +985,24 @@ const KBAgent = {
           }
           toolMsgs.push(`[工具 ${tc.name} 执行结果]\n${toolResult.detail || toolResult.summary || '执行完成'}`);
         }
-        
-        // 4. 把工具结果回传 LLM，发起下一轮流式调用
+
+        // 4. 轮次耗尽：剥离工具 JSON 后的文本才是答案；全 JSON 则兜底说明
+        if (round >= MAX_TOOL_ROUNDS) {
+          const cleaned = typeof extractToolCallBlocks === 'function' ? extractToolCallBlocks(fullText).cleanedText : fullText;
+          finalText = cleaned || '抱歉，连续多轮调用工具后仍未完成任务，请简化问题或稍后重试。';
+          onDelta('\n\n> 🔧 工具调用已达上限\n\n');
+          break;
+        }
+
+        // 5. 把工具结果回传 LLM，发起下一轮流式调用
         const toolFeedback = '### 工具执行结果\n以下是工具返回的数据。请基于这些数据直接回答用户最初的问题。' +
-          (round >= MAX_TOOL_ROUNDS ? '（已达工具调用上限，请用现有信息给出最终答案）' : '如仍需其他工具，可继续返回 JSON 工具调用；否则用 Markdown 输出最终答案。') +
+          '如仍需其他工具，可继续返回 JSON 工具调用；否则用 Markdown 输出最终答案。' +
           '\n\n' + toolMsgs.join('\n\n');
-        
+
         messages.push({ role: 'assistant', content: fullText });
         messages.push({ role: 'user', content: toolFeedback });
-        
+        messages = trimMessages(messages); // 防止多轮工具调用撑爆上下文窗口
+
         const nextResp = await fetch(`${baseUrl}${apiPath}`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${config.apiKey}` },
@@ -982,13 +1014,14 @@ const KBAgent = {
             temperature: 0.7,
           })
         });
-        
+
         if (!nextResp.ok) {
-          // 第二轮起失败 → 降级用上一轮文本作答
-          finalText = fullText;
+          // 第二轮起失败 → 剥离工具 JSON 后降级用上一轮文本作答
+          const cleaned = typeof extractToolCallBlocks === 'function' ? extractToolCallBlocks(fullText).cleanedText : fullText;
+          finalText = cleaned || '抱歉，模型服务暂时不可用，请稍后重试。';
           break;
         }
-        
+
         const reader2 = nextResp.body.getReader();
         let buffer2 = '';
         fullText = ''; // 重置为本轮输出
@@ -1042,20 +1075,19 @@ const KBAgent = {
 // System Prompt 构建
 // ============================================================
 function buildAgentSystemPrompt(mode, ragContext, itemContext, memoryContext) {
-  let prompt = `你是无极 AI 助手，一个智能浏览器知识库助手。
+  let prompt = `你是无极的知识库助手。
 
-## 你的能力
-- 帮助用户管理知识库（网页、对话、文件的收藏和检索）
-- 基于知识库内容回答问题
-- 分析网页内容并提供洞察
-- 建议标签和分类
-- 查找相关内容
+## 你能做什么
+- 管理知识库（收藏网页、对话、文件，检索和整理）
+- 根据知识库里的内容回答问题
+- 帮忙给条目打标签、做分类
+- 找相关内容
 
 ## 当前模式
 `;
   
   if (mode === 'chat') prompt += '对话模式：自由交流，可引用知识库内容。\n';
-  else if (mode === 'ask') prompt += '问答模式：基于知识库内容精准回答问题。\n';
+  else if (mode === 'ask') prompt += '问答模式：根据知识库内容回答问题。\n';
   else if (mode === 'agent') prompt += 'Agent 模式：可调用工具执行操作（添加标签、创建笔记、搜索知识库等）。\n';
   
   prompt += '\n' + ragContext + '\n';

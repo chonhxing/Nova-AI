@@ -5,11 +5,14 @@
 try {
   importScripts(
     'libs/adblock/adblock-parser.js',
+    'libs/wasm/wasm-kernels.js',
     'libs/kb-core.js',
     'libs/kb-agent.js',
     'libs/tab-suspender.js',
     'libs/danmaku-crawler.js'
   );
+  // 预加载 WASM 内核（失败自动降级 JS 兜底，不阻塞启动）
+  if (typeof WasmKernels !== 'undefined' && WasmKernels.init) WasmKernels.init();
 } catch (e) {
   console.warn('[无极 SW] 模块初始化失败：', e.message);
 }
@@ -116,7 +119,6 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.type === 'ADBLOCK_CLEAR_RULES') { handleAdblockClearRules(message, sender, sendResponse); return true; }
   if (message.type === 'ADBLOCK_CLEAR_CUSTOM') { handleAdblockClearCustom(message, sender, sendResponse); return true; }
   if (message.type === 'ADBLOCK_WHITELIST_ADD') { handleAdblockWhitelistAdd(message, sender, sendResponse); return true; }
-  if (message.type === 'ADBLOCK_WHITELIST_ADD') { handleAdblockWhitelistAdd(message, sender, sendResponse); return true; }
   if (message.type === 'ADBLOCK_WHITELIST_TOGGLE') { handleAdblockWhitelistToggle(message, sender, sendResponse); return true; }
   if (message.type === 'ADBLOCK_WHITELIST_ADD_NAMED') { handleAdblockWhitelistAddNamed(message, sender, sendResponse); return true; }
   if (message.type === 'ADBLOCK_WHITELIST_LIST') { handleAdblockWhitelistList(message, sender, sendResponse); return true; }
@@ -156,7 +158,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.type === 'CONSOLE_ATTACH') { handleConsoleAttachDirect(message.tabId || sender.tab?.id).then(r => sendResponse(r)); return true; }
   if (message.type === 'CONSOLE_DETACH') { handleConsoleDetachDirect(message.tabId || sender.tab?.id).then(r => sendResponse(r)); return true; }
   if (message.type === 'CONSOLE_GET_LOGS') { handleConsoleGetLogsDirect(message.tabId || sender.tab?.id, message.filter).then(r => sendResponse(r)); return true; }
-  if (message.type === 'CONSOLE_EVAL') { handleConsoleEvalDirect(message.tabId || sender.tab?.id, message.expression).then(r => sendResponse(r)); return true; }
+  if (message.type === 'CONSOLE_EVAL') { handleConsoleEvalDirect(message.tabId || sender.tab?.id, message.expression).then(r => sendResponse(r)).catch(e => sendResponse({ success: false, summary: e.message })); return true; }
   if (message.type === 'CONSOLE_CLICK') { handleConsoleClickDirect(message.tabId || sender.tab?.id, message.selector).then(r => sendResponse(r)); return true; }
   if (message.type === 'CONSOLE_FILL') { handleConsoleFillDirect(message.tabId || sender.tab?.id, message.selector, message.value).then(r => sendResponse(r)); return true; }
   if (message.type === 'CONSOLE_GET_HTML') { handleConsoleGetHTMLDirect(message.tabId || sender.tab?.id, message.selector).then(r => sendResponse(r)); return true; }
@@ -218,7 +220,7 @@ function getAPIConfig() {
 function handleGetApiConfig(sendResponse) { getAPIConfig().then(c => sendResponse({ success: true, data: c })).catch(e => sendResponse({ success: false, error: e.message })); }
 
 // ============================================================
-// 统一 System Prompt 引擎（无极 V3.3 核心协同层）
+// 统一 System Prompt 引擎
 // ============================================================
 /**
  * 构建统一 System Prompt，让 AI 知晓：
@@ -230,13 +232,12 @@ function handleGetApiConfig(sendResponse) { getAPIConfig().then(c => sendRespons
  */
 async function buildUnifiedSystemPrompt(userQuery, pageUrl, pageTitle) {
   // 1. 插件元信息
-  let prompt = `你是"无极 V3.3"，一款全能 AI 浏览器助手插件（Chrome 扩展）。
-版本: 3.3.0
-开发者: 无极
-技术栈: Manifest V3 · Shadow DOM · IndexedDB · FTS 倒排索引 · RAG 检索增强
+  let prompt = `你是"无极"，一个 Chrome 浏览器扩展助手。
+版本: 3.4.0
+功能: 网页翻译、AI 对话、图片识别、知识库、广告过滤、标签页管理、弹幕管理姬
 
-## 🔧 你能调用的工具（动态实时列表）
-你可以通过返回 JSON 格式的 {"tool":"工具名","params":{...}} 来调用以下工具：`;
+## 工具
+你可以返回 JSON 格式的 {"tool":"工具名","params":{...}} 来调用以下工具：`;
   
   const toolNames = Object.keys(AgentTools);
   toolNames.forEach(name => {
@@ -253,7 +254,7 @@ async function buildUnifiedSystemPrompt(userQuery, pageUrl, pageTitle) {
 - **console_click**: CDP 真实鼠标点击 → {"tool":"console_click","params":{"selector":"button.submit"}}
 - **console_fill**: CDP 填写输入框 → {"tool":"console_fill","params":{"selector":"input","value":"文字"}}
 - **console_get_html**: CDP 读页面文本 → {"tool":"console_get_html","params":{"selector":"#app"}}
-- **console_smart**: 智能探测元素(返回 tag/type/text/位置) → {"tool":"console_smart","params":{"selector":"#video-page-app"}}
+- **console_smart**: 探测元素(返回 tag/type/text/位置) → {"tool":"console_smart","params":{"selector":"#video-page-app"}}
 
 **console_eval 铁律（违反=操作失败）**:
 1. expression ≤200字符，只用精确CSS选择器，禁止 querySelectorAll('*')
@@ -262,7 +263,7 @@ async function buildUnifiedSystemPrompt(userQuery, pageUrl, pageTitle) {
 4. 返回 null → 用 console_smart 重新探测选择器
 5. 不改 body/document 样式，不隐藏/删除容器
 
-**智能路由（严格按照规则）**:
+**路由规则（严格按照规则）**:
 - 用户说"改/替换/修改/删除页面上某内容" → console_eval
 - 用户说"点X按钮" → console_click
 - 用户说"看/读页面内容" → console_get_html 或 read_dom
@@ -352,6 +353,46 @@ ${userQuery}`;
   return prompt;
 }
 
+// ============================================================
+// 工具调用 JSON 提取（括号配对，支持嵌套 params 对象/数组）
+// 供 handleAIChat 与 kb-agent 共用；同时剥离文本中的工具 JSON
+// ============================================================
+function extractToolCallBlocks(text) {
+  const calls = [];
+  // 归一化 {  "tool" → {"tool"
+  let cleaned = String(text || '').replace(/\{\s+"tool"/g, '{"tool"');
+  let searchFrom = 0;
+  let guard = 0;
+  while (guard++ < 50) {
+    const idx = cleaned.indexOf('{"tool"', searchFrom);
+    if (idx < 0) break;
+    let depth = 0, start = -1, end = -1;
+    for (let i = idx; i < cleaned.length; i++) {
+      const c = cleaned[i];
+      if (c === '{') { if (depth === 0) start = i; depth++; }
+      else if (c === '}') { depth--; if (depth === 0) { end = i; break; } }
+      else if (c === '"') {
+        // 跳过字符串字面量（含转义）
+        let j = i + 1;
+        while (j < cleaned.length && cleaned[j] !== '"') { if (cleaned[j] === '\\') j++; j++; }
+        i = j;
+      }
+    }
+    if (start < 0 || end < 0) break; // 未闭合 JSON，放弃
+    const block = cleaned.substring(start, end + 1);
+    let parsed = null;
+    try { parsed = JSON.parse(block); } catch (e) {}
+    if (parsed && parsed.tool && parsed.params && typeof parsed.params === 'object') {
+      calls.push({ name: String(parsed.tool), params: parsed.params });
+      cleaned = cleaned.substring(0, start) + cleaned.substring(end + 1);
+      searchFrom = start;
+    } else {
+      searchFrom = idx + 6;
+    }
+  }
+  return { calls, cleanedText: cleaned.replace(/\n{3,}/g, '\n\n').trim() };
+}
+
 async function handleAIChat(message, sender, sendResponse) {
   const { userMessage, pageUrl, pageTitle, enableActions, conversationHistory } = message.payload;
   try {
@@ -429,20 +470,11 @@ async function handleAIChat(message, sender, sendResponse) {
     try {
       const MAX_TOOL_ROUNDS = 5;
       let round = 0;
-      let finalText = fullText;
+      let finalText = '';
       while (round < MAX_TOOL_ROUNDS) {
         round++;
-        // 1. 检测工具调用（去掉 markdown 包裹 + 自动 trim JSON 前空格）
-        const stripped = fullText.replace(/```(?:json)?\s*/g, '').replace(/```/g, '')
-          // 自动修复 AI 在 JSON 前多加的空格：{  "tool" → {"tool"
-          .replace(/\{\s{2,}"tool"/g, '{"tool"');
-        const toolRegex = /\{\s*"tool"\s*:\s*"(\w+)"\s*,\s*"params"\s*:\s*(\{[\s\S]*?\})\s*\}/g;
-        const toolCalls = [];
-        let m;
-        while ((m = toolRegex.exec(stripped)) !== null) {
-          let p; try { p = JSON.parse(m[2]); } catch (e) { continue; }
-          toolCalls.push({ name: m[1], params: p });
-        }
+        // 1. 检测工具调用（括号配对解析，支持嵌套 params）
+        const { calls: toolCalls } = extractToolCallBlocks(fullText);
         // 2. 无工具调用 → 本轮即最终答案
         if (toolCalls.length === 0) { finalText = fullText; break; }
 
@@ -461,9 +493,17 @@ async function handleAIChat(message, sender, sendResponse) {
           toolMsgs.push(`[工具 ${tc.name} 执行结果]\n${r.detail || r.summary || '执行完成'}`);
         }
 
-        // 4. 工具结果回传 LLM，发起下一轮流式调用
+        // 4. 轮次耗尽：剥离工具 JSON 后的文本才是答案；全 JSON 则兜底说明
+        if (round >= MAX_TOOL_ROUNDS) {
+          const { cleanedText } = extractToolCallBlocks(fullText);
+          finalText = cleanedText || '抱歉，连续多轮调用工具后仍未完成任务，请简化问题或稍后重试。';
+          if (tabId) chrome.tabs.sendMessage(tabId, { type: 'AI_STREAM_DELTA', delta: '\n\n> 🔧 工具调用已达上限\n\n' }).catch(() => {});
+          break;
+        }
+
+        // 5. 工具结果回传 LLM，发起下一轮流式调用
         const toolFeedback = '### 工具执行结果\n以下是工具返回的数据，请直接回答用户最初的问题。' +
-          (round >= MAX_TOOL_ROUNDS ? '（已达工具调用上限，请用现有信息给出最终答案）' : '如仍需其他工具，可继续返回 JSON 工具调用；否则用 Markdown 输出最终答案。') +
+          '如仍需其他工具，可继续返回 JSON 工具调用；否则用 Markdown 输出最终答案。' +
           '\n\n' + toolMsgs.join('\n\n');
         messages.push({ role: 'assistant', content: fullText });
         messages.push({ role: 'user', content: toolFeedback });
@@ -473,7 +513,13 @@ async function handleAIChat(message, sender, sendResponse) {
           headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${config.apiKey}` },
           body: JSON.stringify({ model: config.model, messages, stream: true, max_tokens: 4096 })
         });
-        if (!resp2.ok) { finalText = fullText; break; }
+        if (!resp2.ok) {
+          // 失败降级：上一轮文本剥离工具 JSON 后仍有内容则用之，否则给错误提示
+          const { cleanedText } = extractToolCallBlocks(fullText);
+          finalText = cleanedText || '抱歉，模型服务暂时不可用，请稍后重试。';
+          if (tabId) chrome.tabs.sendMessage(tabId, { type: 'AI_STREAM_ERROR', error: '模型调用失败 (HTTP ' + resp2.status + ')' }).catch(() => {});
+          break;
+        }
 
         const reader2 = resp2.body.getReader();
         let b2 = '';
@@ -598,7 +644,6 @@ async function handleAnalyzeImage(message, sender, sendResponse) {
 
 /**
  * 截图分析：截图当前页面 → 视觉模型分析 → 联动语言模型
- * 核心用途：让 AI "看到"DOM 工具读不到的动态内容（B站评论区等）
  */
 async function handleAnalyzeScreen(message, sender, sendResponse) {
   const { prompt, scrollFirst } = message.payload || {};
@@ -700,33 +745,193 @@ async function callVisionStream(messages, systemPrompt, visionConfig, model, tab
   sendToTab({ type: 'AI_STREAM_DONE', fullText: totalText });
 }
 
+// ============================================================
+// 翻译引擎（V5）：
+//   1. Google 翻译免费接口 —— 零配置、机翻品质即谷歌级别（默认引擎）
+//   2. AI 模型引擎 —— 需要 API Key，JSON 编号协议保证多段译文不错位
+// ============================================================
+function getTranslatorAPIConfig() {
+  return new Promise((resolve) => {
+    chrome.storage.sync.get(['translatorApiConfig', 'apiConfig'], (r) => {
+      const t = r.translatorApiConfig || {};
+      if (t.apiKey) {
+        resolve({ apiKey: t.apiKey, baseUrl: t.baseUrl || 'https://api.deepseek.com', model: t.model || 'deepseek-chat', provider: t.provider || 'deepseek', engine: t.engine || 'ai' });
+        return;
+      }
+      const main = r.apiConfig || { baseUrl: 'https://api.deepseek.com', apiKey: '', model: 'deepseek-chat', provider: 'deepseek' };
+      resolve({ ...main, engine: t.engine || (main.apiKey ? 'ai' : 'auto') });
+    });
+  });
+}
+
+function mapGoogleLang(lang) {
+  if (!lang || lang === 'auto' || lang === 'zh') return lang === 'zh' ? 'zh-CN' : 'auto';
+  if (lang === 'zh-CN' || lang === 'zh-TW' || lang === 'en') return lang;
+  // 其他 BCP-47 代码（ja/ko/fr/de 等）原样透传
+  return lang;
+}
+
+function mapMicrosoftLang(lang) {
+  if (!lang || lang === 'auto' || lang === 'zh') return null; // null = 自动检测（省略 from 参数）
+  if (lang === 'zh-CN' || lang === 'zh') return 'zh-Hans';
+  if (lang === 'zh-TW') return 'zh-Hant';
+  return lang;
+}
+
+async function translateWithGoogle(texts, sourceLang, targetLang) {
+  const sl = mapGoogleLang(sourceLang), tl = mapGoogleLang(targetLang);
+  const joined = texts.join('\n');
+  const url = 'https://translate.googleapis.com/translate_a/single?client=gtx&dt=t&sl=' + encodeURIComponent(sl) + '&tl=' + encodeURIComponent(tl) + '&q=' + encodeURIComponent(joined);
+  const resp = await fetch(url);
+  if (!resp.ok) throw new Error('Google 翻译接口 HTTP ' + resp.status);
+  const data = await resp.json();
+  const full = (Array.isArray(data?.[0]) ? data[0] : []).map(seg => (Array.isArray(seg) && seg[0]) ? seg[0] : '').join('');
+  const lines = full.split('\n');
+  if (lines.length === texts.length) return lines;
+  // 换行被合并时逐条兜底
+  const out = [];
+  for (const text of texts) {
+    const oneUrl = 'https://translate.googleapis.com/translate_a/single?client=gtx&dt=t&sl=' + encodeURIComponent(sl) + '&tl=' + encodeURIComponent(tl) + '&q=' + encodeURIComponent(text);
+    const oneResp = await fetch(oneUrl);
+    if (!oneResp.ok) { out.push(''); continue; }
+    const oneData = await oneResp.json();
+    out.push((Array.isArray(oneData?.[0]) ? oneData[0] : []).map(seg => (Array.isArray(seg) && seg[0]) ? seg[0] : '').join(''));
+    await new Promise(r => setTimeout(r, 60)); // 避免瞬时请求过多
+  }
+  return out;
+}
+
+// Microsoft Edge 内置翻译接口（与 Edge 浏览器同源，海外/国内均可访问）
+async function translateWithMicrosoft(texts, sourceLang, targetLang) {
+  const from = mapMicrosoftLang(sourceLang), to = mapMicrosoftLang(targetLang) || 'en';
+  const authResp = await fetch('https://edge.microsoft.com/translate/auth', { method: 'GET' });
+  if (!authResp.ok) throw new Error('Microsoft 翻译鉴权失败 HTTP ' + authResp.status);
+  const authToken = (await authResp.text()).trim();
+  if (!authToken) throw new Error('Microsoft 翻译鉴权失败');
+  const baseUrl = 'https://api-edge.cognitive.microsofttranslator.com/translate?api-version=3.0' + (from ? '&from=' + from : '') + '&to=' + to;
+  const resp = await fetch(baseUrl, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Ocp-Apim-Subscription-Key': authToken,
+      'Or-Referer': 'https://cn.bing.com'
+    },
+    body: JSON.stringify(texts.map(t => ({ Text: t })))
+  });
+  if (!resp.ok) throw new Error('Microsoft 翻译接口 HTTP ' + resp.status);
+  const data = await resp.json();
+  if (!Array.isArray(data)) throw new Error('Microsoft 翻译接口返回异常');
+  return data.map(item => item?.translations?.[0]?.text || '');
+}
+
+// 免费引擎链：自动模式先 Google 后 Microsoft，任一失败自动切换下一个
+async function translateFree(texts, sourceLang, targetLang, engine) {
+  const order = engine === 'google' ? ['google'] : engine === 'microsoft' ? ['microsoft'] : ['google', 'microsoft'];
+  let lastErr = null;
+  for (const e of order) {
+    try {
+      return await (e === 'google' ? translateWithGoogle(texts, sourceLang, targetLang) : translateWithMicrosoft(texts, sourceLang, targetLang));
+    } catch (err) { lastErr = err; }
+  }
+  throw lastErr || new Error('免费翻译接口不可用');
+}
+
+function parseNumberedTranslations(content, n) {
+  if (!content) return [];
+  const cleaned = content.replace(/```(?:json)?\s*/gi, '').trim();
+  const start = cleaned.indexOf('{');
+  const end = cleaned.lastIndexOf('}');
+  if (start >= 0 && end > start) {
+    try {
+      const obj = JSON.parse(cleaned.substring(start, end + 1));
+      const out = [];
+      for (let i = 0; i < n; i++) {
+        const v = obj[String(i + 1)] ?? obj[i + 1];
+        out.push(typeof v === 'string' ? v.trim() : '');
+      }
+      if (out.some(s => s)) return out;
+    } catch (e) { /* 落入行解析兜底 */ }
+  }
+  // 兜底1：逐行解析 "1. 译文" 前缀
+  const out = new Array(n).fill('');
+  let idx = 0;
+  for (const rawLine of cleaned.split('\n')) {
+    const line = rawLine.trim().replace(/^[-*>\s]+/, '');
+    if (!line) continue;
+    const m = line.match(/^(\d+)\s*(?:\.\s+|、\s*|\)\s*|[:：]\s*)(.*)$/);
+    const body = m ? m[2].trim() : line;
+    if (!body) continue;
+    const num = m ? (parseInt(m[1], 10) - 1) : idx;
+    if (num >= 0 && num < n) out[num] = body;
+    idx++;
+  }
+  if (out.some(s => s)) return out;
+  // 兜底2：按行顺序 1:1 映射
+  const plain = cleaned.split('\n').map(s => s.replace(/^\d+[.、)\]]*\s*/, '').trim()).filter(Boolean);
+  return plain.length ? plain : [];
+}
+
+async function translateWithAI(texts, sourceLang, targetLang, cfg) {
+  const targetName = targetLang === 'zh-CN' || targetLang === 'zh' ? '简体中文' : (targetLang === 'en' ? '英文' : targetLang);
+  const numbered = texts.map((t, i) => (i + 1) + '. ' + t).join('\n');
+  const prompt = [
+    '你是一个专业的网页翻译引擎。请把下面的 ' + texts.length + ' 段文本翻译成' + targetName + '。',
+    '要求：每段独立翻译，语义准确、表达自然地道，符合母语阅读习惯；代码、函数名、变量名、命令名、URL、邮箱、数字、符号保持原样，一律不翻译；不要添加任何解释、注释、前后缀、原文或引号。',
+    '严格按 JSON 返回，不要输出其他内容：{"1":"译文1","2":"译文2",...}，键为段落编号 1..' + texts.length + '。',
+    '',
+    '待翻译文本：',
+    numbered
+  ].join('\n');
+  const baseUrl = (cfg.baseUrl || 'https://api.deepseek.com').replace(/\/+$/, '');
+  const apiPath = cfg.provider === 'zhipu' ? '/v4/chat/completions' : '/v1/chat/completions';
+  const response = await fetch(`${baseUrl}${apiPath}`, { method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${cfg.apiKey}` }, body: JSON.stringify({ model: cfg.model || 'deepseek-chat', messages: [{ role: 'user', content: prompt }], max_tokens: 4096, temperature: 0.3 }) });
+  if (!response.ok) throw new Error(`API ${response.status}`);
+  const result = await response.json();
+  return parseNumberedTranslations(result?.choices?.[0]?.message?.content || '', texts.length);
+}
+
 async function handleTranslateBatch(message, sender, sendResponse) {
-  const { texts, sourceLang, targetLang, delimiter } = message.payload;
+  const { texts, sourceLang, targetLang } = message.payload || {};
+  if (!texts || !texts.length) { sendResponse({ success: true, translations: [] }); return; }
   try {
-    const config = await getAPIConfig();
-    if (!config.apiKey) { sendResponse({ success: false, error: '请先配置 API Key' }); return; }
-    const prompt = `翻译以下${texts.length}段文本从${sourceLang}到${targetLang}。用"${delimiter}"分隔。只返回翻译。\n\n${texts.join(` ${delimiter} `)}`;
-    const baseUrl = config.baseUrl.replace(/\/+$/, ''); const provider = config.provider || ''; let apiPath = provider === 'zhipu' ? '/v4/chat/completions' : '/v1/chat/completions';
-    const response = await fetch(`${baseUrl}${apiPath}`, { method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${config.apiKey}` }, body: JSON.stringify({ model: config.model, messages: [{ role: 'user', content: prompt }], max_tokens: 4096 }) });
-    if (!response.ok) { sendResponse({ success: false, error: `API ${response.status}` }); return; }
-    const result = await response.json();
-    const content = result?.choices?.[0]?.message?.content || '';
-    const translations = content.split(delimiter).map(s => s.trim()).filter(s => s.length > 0);
+    const cfg = await getTranslatorAPIConfig();
+    let translations;
+    if (cfg.engine === 'ai') {
+      if (!cfg.apiKey) { sendResponse({ success: false, error: 'AI 翻译引擎需要 API Key，可在设置中切换为免费引擎' }); return; }
+      try {
+        translations = await translateWithAI(texts, sourceLang, targetLang, cfg);
+      } catch (e) {
+        // AI 引擎失败自动降级免费引擎
+        translations = await translateFree(texts, sourceLang, targetLang, cfg.engine === 'ai' ? 'auto' : cfg.engine);
+      }
+    } else {
+      translations = await translateFree(texts, sourceLang, targetLang, cfg.engine);
+    }
     while (translations.length < texts.length) translations.push('');
     sendResponse({ success: true, translations: translations.slice(0, texts.length) });
   } catch (e) { sendResponse({ success: false, error: e.message }); }
 }
+
 async function handleTranslateSelection(message, sender, sendResponse) {
-  const { text, targetLang } = message.payload;
+  const { text, targetLang } = message.payload || {};
+  if (!text) { sendResponse({ success: true, translation: '' }); return; }
   try {
-    const config = await getAPIConfig();
-    if (!config.apiKey) { sendResponse({ success: false, error: '请先配置 API Key' }); return; }
-    const prompt = `翻译为${targetLang === 'zh-CN' ? '简体中文' : '英文'}，只返回译文：\n\n"${text}"`;
-    const baseUrl = config.baseUrl.replace(/\/+$/, ''); const provider = config.provider || ''; let apiPath = provider === 'zhipu' ? '/v4/chat/completions' : '/v1/chat/completions';
-    const response = await fetch(`${baseUrl}${apiPath}`, { method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${config.apiKey}` }, body: JSON.stringify({ model: config.model, messages: [{ role: 'user', content: prompt }], max_tokens: 1024 }) });
-    if (!response.ok) { sendResponse({ success: false, error: `API ${response.status}` }); return; }
-    const result = await response.json();
-    sendResponse({ success: true, translation: result?.choices?.[0]?.message?.content?.trim() || '' });
+    const cfg = await getTranslatorAPIConfig();
+    let translation = '';
+    if (cfg.engine === 'ai') {
+      if (!cfg.apiKey) throw new Error('AI 翻译引擎需要 API Key');
+      try {
+        const result = await translateWithAI([text], 'auto', targetLang, cfg);
+        translation = result[0] || '';
+      } catch (e) {
+        const result = await translateFree([text], 'auto', targetLang, 'auto');
+        translation = result[0] || '';
+      }
+    } else {
+      const result = await translateFree([text], 'auto', targetLang, cfg.engine);
+      translation = result[0] || '';
+    }
+    sendResponse({ success: true, translation });
   } catch (e) { sendResponse({ success: false, error: e.message }); }
 }
 
@@ -781,16 +986,41 @@ function dbCount(storeName) { return new Promise((resolve, reject) => { const re
 // 广告过滤
 // ============================================================
 const ADBLOCK_DYNAMIC_RULE_ID_START = 5000;
-const RESOURCE_TYPE_MAP = { 'script': 'script', 'image': 'image', 'stylesheet': 'stylesheet', 'xmlhttprequest': 'xmlhttprequest', 'subdocument': 'sub_frame', 'media': 'media', 'font': 'font', 'websocket': 'websocket', 'ping': 'ping', 'main_frame': 'main_frame', 'other': 'other' };
+const RESOURCE_TYPE_MAP = { 'script': 'script', 'image': 'image', 'stylesheet': 'stylesheet', 'xmlhttprequest': 'xmlhttprequest', 'subdocument': 'sub_frame', 'media': 'media', 'font': 'font', 'websocket': 'websocket', 'ping': 'ping', 'main_frame': 'main_frame', 'document': 'main_frame', 'popup': 'main_frame', 'object': 'object', 'csp_report': 'csp_report', 'other': 'other' };
+// DNR 不支持的"修改型"规则选项，整体跳过（强行转 block 会误伤内容）
+const DNR_UNSUPPORTED_OPTIONS = ['removeparam', 'csp', 'redirect', 'redirect-rule', 'replace', 'elemhide', 'specifichide'];
+
+/**
+ * DNR urlFilter 只接受 URL 字符及 | * ^；含非法字符的规则会让整批添加失败。
+ * 这里做预校验：非法/正则式/超长模式的规则直接丢弃。
+ */
+function sanitizeURLFilter(urlFilter) {
+  if (!urlFilter || typeof urlFilter !== 'string' || urlFilter.length < 2 || urlFilter.length > 200) return null;
+  // ABP 正则规则（/.../ 含 | ( ) [ ] { } \ ? + $ 等元字符）DNR 无法表达 → 丢弃；
+  // 纯路径子串（如 /ads/path/）是合法 urlFilter，保留
+  if (urlFilter.startsWith('/') && urlFilter.endsWith('/') && urlFilter.length > 3) {
+    const body = urlFilter.substring(1, urlFilter.length - 1);
+    if (/[|()\[\]{}<>\\?+$]/.test(body)) return null;
+  }
+  // 非法字符：DNR 校验会拒绝整批
+  if (/[\[\]{}<>"\\]|\s/.test(urlFilter)) return null;
+  return urlFilter;
+}
 
 function compileAdblockRules(ruleText) {
   if (!ruleText || typeof ruleText !== 'string') return { dnrRules: [], cosmeticGlobal: [], cosmeticDomain: {} };
   const lines = ruleText.split('\n'); const dnrRules = []; const cosmeticGlobal = []; const cosmeticDomain = {};
   for (const line of lines) {
-    const trimmed = line.trim(); if (!trimmed || trimmed.startsWith('!') || trimmed.startsWith('[') || trimmed.startsWith('@@')) continue;
+    const trimmed = line.trim(); if (!trimmed || trimmed.startsWith('!') || trimmed.startsWith('[') || trimmed.startsWith('@@') || trimmed.includes('#$#')) continue;
     const parsed = typeof AdblockParser !== 'undefined' ? AdblockParser.parse(trimmed) : null;
     if (parsed && parsed.type === 2) {
-      if (parsed.domains && parsed.domains.length > 0) { parsed.domains.forEach(d => { if (!cosmeticDomain[d]) cosmeticDomain[d] = []; cosmeticDomain[d].push(parsed.selector); }); }
+      // #@# 例外规则如果是"取消隐藏"语义，绝对不能当隐藏规则用
+      if (parsed.exception) continue;
+      if (parsed.domains && parsed.domains.length > 0) {
+        const exclude = parsed.domains.some(d => d.startsWith('~'));
+        if (exclude) continue; // 负域名限定暂不支持，跳过避免误伤
+        parsed.domains.forEach(d => { if (!cosmeticDomain[d]) cosmeticDomain[d] = []; cosmeticDomain[d].push(parsed.selector); });
+      }
       else { cosmeticGlobal.push(parsed.selector); }
       continue;
     }
@@ -799,32 +1029,92 @@ function compileAdblockRules(ruleText) {
   }
   return { dnrRules, cosmeticGlobal, cosmeticDomain };
 }
+
+/**
+ * 编译用户自定义规则（AI 生成或手填）：支持 ## 元素隐藏规则与 || 网络过滤规则，
+ * 裸 CSS 选择器（如 .ad-banner）按全局元素隐藏处理。
+ */
+function compileCustomRuleLines(customRules) {
+  const dnrRules = []; const cosmeticGlobal = []; const cosmeticDomain = {};
+  if (!Array.isArray(customRules)) return { dnrRules, cosmeticGlobal, cosmeticDomain };
+  for (const raw of customRules) {
+    const line = String(raw || '').trim();
+    if (!line || line.startsWith('!') || line.startsWith('[') || line.startsWith('@@') || line.includes('#$#')) continue;
+    const parsed = typeof AdblockParser !== 'undefined' ? AdblockParser.parse(line) : null;
+    if (parsed && parsed.type === 2) {
+      if (parsed.exception) continue;
+      if (parsed.domains && parsed.domains.length > 0) {
+        if (parsed.domains.some(d => d.startsWith('~'))) continue;
+        parsed.domains.forEach(d => { if (!cosmeticDomain[d]) cosmeticDomain[d] = []; cosmeticDomain[d].push(parsed.selector); });
+      } else cosmeticGlobal.push(parsed.selector);
+      continue;
+    }
+    // 裸 CSS 选择器（.ad-banner / #ad / [data-ad] / :has(...)）→ 元素隐藏
+    if (/^[.#\[:]/.test(line)) {
+      cosmeticGlobal.push(line);
+      continue;
+    }
+    const looksNetwork = (/^[\w.-]+(\.[\w.-]+)+\^?$/.test(line)) || line.startsWith('|') || line.includes('^') || /^\/[A-Za-z0-9._]/.test(line);
+    if (looksNetwork) {
+      const rule = filterToDNRRule(line);
+      if (rule) dnrRules.push(rule);
+      continue;
+    }
+  }
+  return { dnrRules, cosmeticGlobal, cosmeticDomain };
+}
 function filterToDNRRule(ruleLine) {
   let pattern = ruleLine; const options = {};
   const dollarIdx = ruleLine.lastIndexOf('$');
-  if (dollarIdx >= 0) { pattern = ruleLine.substring(0, dollarIdx); ruleLine.substring(dollarIdx + 1).split(',').forEach(opt => { const t = opt.trim(); if (RESOURCE_TYPE_MAP[t]) options.resourceType = t; else if (t.startsWith('domain=')) { const dl = t.substring(7).split('|'); options.includeDomains = dl.filter(d => !d.startsWith('~')); options.excludeDomains = dl.filter(d => d.startsWith('~')).map(d => d.substring(1)); } else if (t === 'third-party') options.thirdParty = true; else if (t === '~third-party' || t === 'first-party') options.firstParty = true; else if (t === 'badfilter') options.badfilter = true; }); }
-  if (options.badfilter) return null;
+  if (dollarIdx >= 0) { pattern = ruleLine.substring(0, dollarIdx); ruleLine.substring(dollarIdx + 1).split(',').forEach(opt => { const t = opt.trim(); if (DNR_UNSUPPORTED_OPTIONS.includes(t)) { options.skip = true; return; } const rt = RESOURCE_TYPE_MAP[t]; if (rt) options.resourceType = rt; else if (t.startsWith('domain=')) { const dl = t.substring(7).split('|'); options.includeDomains = dl.filter(d => !d.startsWith('~')); options.excludeDomains = dl.filter(d => d.startsWith('~')).map(d => d.substring(1)); } else if (t === 'third-party') options.thirdParty = true; else if (t === '~third-party' || t === 'first-party') options.firstParty = true; }); }
+  if (options.skip || options.badfilter) return null;
   let urlFilter = pattern;
   if (urlFilter.startsWith('||')) urlFilter = '*://*.' + urlFilter.substring(2);
   else if (urlFilter.startsWith('|')) urlFilter = urlFilter.substring(1);
-  else if (/^[a-zA-Z0-9._-]+\^?$/.test(urlFilter)) urlFilter = '*://*.' + urlFilter + '/*';
+  else if (/^[a-zA-Z0-9._-]+\^?$/.test(urlFilter) && urlFilter.includes('.')) urlFilter = '*://*.' + urlFilter.replace(/\^?$/, '') + '/*';
   urlFilter = urlFilter.replace(/\^/g, '*');
+  urlFilter = sanitizeURLFilter(urlFilter);
+  if (!urlFilter) return null;
   const rule = { id: 0, priority: 1, action: { type: 'block' }, condition: { urlFilter } };
-  if (options.resourceType) rule.condition.resourceTypes = [RESOURCE_TYPE_MAP[options.resourceType] || options.resourceType];
+  if (options.resourceType) rule.condition.resourceTypes = [options.resourceType];
   if (options.includeDomains && options.includeDomains.length > 0) rule.condition.initiatorDomains = options.includeDomains;
   if (options.excludeDomains && options.excludeDomains.length > 0) rule.condition.excludedInitiatorDomains = options.excludeDomains;
   if (options.thirdParty) rule.condition.domainType = 'thirdParty';
   if (options.firstParty) rule.condition.domainType = 'firstParty';
   return rule;
 }
-async function updateDNRRules(dnrRules) {
+async function updateDNRRules(dnrRules, excludedInitiatorDomains = []) {
   try {
-    const rules = dnrRules.map((r, i) => ({ ...r, id: ADBLOCK_DYNAMIC_RULE_ID_START + i }));
+    const rules = dnrRules
+      .map((r, i) => {
+        const rule = { ...r, id: ADBLOCK_DYNAMIC_RULE_ID_START + i };
+        // 白名单域名写入 excludedInitiatorDomains：由这些域名发起的请求不被拦截
+        if (excludedInitiatorDomains.length > 0) {
+          rule.condition.excludedInitiatorDomains = [...new Set([...(rule.condition.excludedInitiatorDomains || []), ...excludedInitiatorDomains])];
+        }
+        return rule;
+      })
+      .filter(r => !!sanitizeURLFilter(r.condition?.urlFilter))
+      .slice(0, 5000);
     const existing = await chrome.declarativeNetRequest.getDynamicRules();
     if (existing.length > 0) await chrome.declarativeNetRequest.updateDynamicRules({ removeRuleIds: existing.map(r => r.id) });
-    if (rules.length > 0) await chrome.declarativeNetRequest.updateDynamicRules({ addRules: rules.slice(0, 5000) });
-    await chrome.storage.local.set({ adblock_dnr_meta: { ruleCount: rules.length, updatedAt: Date.now() } });
-    return { success: true, ruleCount: rules.length };
+    let failed = 0;
+    const CHUNK = 500;
+    for (let i = 0; i < rules.length; i += CHUNK) {
+      const chunk = rules.slice(i, i + CHUNK);
+      try {
+        await chrome.declarativeNetRequest.updateDynamicRules({ addRules: chunk });
+      } catch (e) {
+        // 整批失败时逐条降级：跳过单条无效规则，避免一个坏规则拖垮全部广告屏蔽
+        for (const rule of chunk) {
+          try { await chrome.declarativeNetRequest.updateDynamicRules({ addRules: [rule] }); }
+          catch (e2) { failed++; }
+        }
+      }
+    }
+    await chrome.storage.local.set({ adblock_dnr_meta: { ruleCount: rules.length - failed, failedCount: failed, updatedAt: Date.now() } });
+    if (failed > 0) console.warn('[无极 SW] 广告规则: 跳过 ' + failed + ' 条无效规则, 生效 ' + (rules.length - failed) + ' 条');
+    return { success: true, ruleCount: rules.length - failed, failedCount: failed };
   } catch (error) { return { success: false, error: error.message }; }
 }
 async function fetchFilterList(url) { try { const resp = await fetch(url, { cache: 'no-cache' }); if (!resp.ok) throw new Error(`HTTP ${resp.status}`); return await resp.text(); } catch (e) { return null; } }
@@ -835,8 +1125,14 @@ async function initAdblockRules() {
   else { try { const resp = await fetch(chrome.runtime.getURL('libs/adblock/adblock-filter-lists.json')); const data = await resp.json(); filterLists = (data.lists || []).filter(l => l.enabled); } catch (e) { filterLists = []; } }
   let allDNR = []; let allCosmeticGlobal = []; let allCosmeticDomain = {};
   for (const list of filterLists) { if (!list.enabled) continue; const text = await fetchFilterList(list.url); if (!text) continue; const compiled = compileAdblockRules(text); allDNR = allDNR.concat(compiled.dnrRules); compiled.cosmeticGlobal.forEach(s => allCosmeticGlobal.push(s)); for (const [domain, selectors] of Object.entries(compiled.cosmeticDomain)) { if (!allCosmeticDomain[domain]) allCosmeticDomain[domain] = []; allCosmeticDomain[domain] = allCosmeticDomain[domain].concat(selectors); } }
+  // 用户自定义规则（AI 生成 / 手填）一并生效
+  const custom = compileCustomRuleLines(config.customRules);
+  allDNR = allDNR.concat(custom.dnrRules);
+  custom.cosmeticGlobal.forEach(s => allCosmeticGlobal.push(s));
+  for (const [domain, selectors] of Object.entries(custom.cosmeticDomain)) { if (!allCosmeticDomain[domain]) allCosmeticDomain[domain] = []; allCosmeticDomain[domain] = allCosmeticDomain[domain].concat(selectors); }
   allCosmeticGlobal = [...new Set(allCosmeticGlobal)]; for (const d of Object.keys(allCosmeticDomain)) allCosmeticDomain[d] = [...new Set(allCosmeticDomain[d])];
-  const dnrResult = await updateDNRRules(allDNR);
+  const whitelist = await getWhitelistItems();
+  const dnrResult = await updateDNRRules(allDNR, whitelist.map(i => i.domain));
   await chrome.storage.local.set({ adblock_cosmetic_rules: { global: allCosmeticGlobal, domain: allCosmeticDomain } });
   const tabs = await chrome.tabs.query({}); tabs.forEach(tab => { if (tab.id) chrome.tabs.sendMessage(tab.id, { type: 'ADBLOCK_UPDATE_COSMETIC', rules: { global: allCosmeticGlobal, domain: allCosmeticDomain } }).catch(() => {}); });
   chrome.alarms.create('adblock-update', { periodInMinutes: 1440 });
@@ -844,13 +1140,13 @@ async function initAdblockRules() {
 async function getAdblockConfig() { const r = await chrome.storage.sync.get('adblockConfig'); return r.adblockConfig || { enabled: true, customRules: [], filterLists: null }; }
 async function saveAdblockConfig(config) { await chrome.storage.sync.set({ adblockConfig: config }); }
 
-async function handleAdblockToggle(message, sender, sendResponse) { try { const config = await getAdblockConfig(); if (typeof message.enabled === 'boolean') config.enabled = message.enabled; await saveAdblockConfig(config); const tabs = await chrome.tabs.query({}); tabs.forEach(tab => { if (tab.id) chrome.tabs.sendMessage(tab.id, { type: 'ADBLOCK_TOGGLE', enabled: config.enabled }).catch(() => {}); }); sendResponse({ success: true, config }); } catch (e) { sendResponse({ success: false, error: e.message }); } }
+async function handleAdblockToggle(message, sender, sendResponse) { try { const config = await getAdblockConfig(); if (typeof message.enabled === 'boolean') config.enabled = message.enabled; await saveAdblockConfig(config); const tabs = await chrome.tabs.query({}); tabs.forEach(tab => { if (tab.id) chrome.tabs.sendMessage(tab.id, { type: 'ADBLOCK_TOGGLE', enabled: config.enabled }).catch(() => {}); }); if (!config.enabled) { const existing = await chrome.declarativeNetRequest.getDynamicRules(); if (existing.length > 0) await chrome.declarativeNetRequest.updateDynamicRules({ removeRuleIds: existing.map(r => r.id) }); } else { initAdblockRules().catch(e => console.error('[无极 SW] 广告过滤重载失败:', e)); } sendResponse({ success: true, config }); } catch (e) { sendResponse({ success: false, error: e.message }); } }
 async function handleAdblockUpdateRules(message, sender, sendResponse) { try { const cosmeticRules = await chrome.storage.local.get('adblock_cosmetic_rules'); if (cosmeticRules.adblock_cosmetic_rules) { const tabs = await chrome.tabs.query({ active: true, currentWindow: true }); tabs.forEach(tab => { if (tab.id) chrome.tabs.sendMessage(tab.id, { type: 'ADBLOCK_UPDATE_COSMETIC', rules: cosmeticRules.adblock_cosmetic_rules }).catch(() => {}); }); } sendResponse({ success: true }); } catch (e) { sendResponse({ success: false, error: e.message }); } }
 async function handleAdblockGetStats(message, sender, sendResponse) { try { const config = await getAdblockConfig(); const meta = await chrome.storage.local.get('adblock_dnr_meta'); const cosmeticRules = await chrome.storage.local.get('adblock_cosmetic_rules'); let cg = 0, cd = 0; if (cosmeticRules.adblock_cosmetic_rules) { cg = (cosmeticRules.adblock_cosmetic_rules.global || []).length; cd = Object.values(cosmeticRules.adblock_cosmetic_rules.domain || {}).flat().length; } sendResponse({ success: true, stats: { enabled: config.enabled, dnrRuleCount: meta.adblock_dnr_meta?.ruleCount || 0, cosmeticGlobalCount: cg, cosmeticDomainCount: cd, customRuleCount: (config.customRules || []).length, updatedAt: meta.adblock_dnr_meta?.updatedAt || null } }); } catch (e) { sendResponse({ success: false, error: e.message }); } }
 async function handleAdblockGetLists(message, sender, sendResponse) { try { const config = await getAdblockConfig(); if (config.filterLists && config.filterLists.length > 0) sendResponse({ success: true, lists: config.filterLists }); else { try { const resp = await fetch(chrome.runtime.getURL('libs/adblock/adblock-filter-lists.json')); const data = await resp.json(); sendResponse({ success: true, lists: data.lists || [] }); } catch (e) { sendResponse({ success: true, lists: [] }); } } } catch (e) { sendResponse({ success: false, error: e.message }); } }
 async function handleAdblockSaveLists(message, sender, sendResponse) { try { const config = await getAdblockConfig(); config.filterLists = message.lists; await saveAdblockConfig(config); sendResponse({ success: true }); } catch (e) { sendResponse({ success: false, error: e.message }); } }
 async function handleAdblockClearRules(message, sender, sendResponse) { try { const existing = await chrome.declarativeNetRequest.getDynamicRules(); if (existing.length > 0) await chrome.declarativeNetRequest.updateDynamicRules({ removeRuleIds: existing.map(r => r.id) }); await chrome.storage.local.remove('adblock_dnr_meta'); await chrome.storage.local.remove('adblock_cosmetic_rules'); const tabs = await chrome.tabs.query({}); tabs.forEach(tab => { if (tab.id) chrome.tabs.sendMessage(tab.id, { type: 'ADBLOCK_UPDATE_COSMETIC', rules: { global: [], domain: {} } }).catch(() => {}); }); sendResponse({ success: true }); } catch (e) { sendResponse({ success: false, error: e.message }); } }
-async function handleAdblockClearCustom(message, sender, sendResponse) { try { const config = await getAdblockConfig(); config.customRules = []; await saveAdblockConfig(config); sendResponse({ success: true }); } catch (e) { sendResponse({ success: false, error: e.message }); } }
+async function handleAdblockClearCustom(message, sender, sendResponse) { try { const config = await getAdblockConfig(); config.customRules = []; await saveAdblockConfig(config); initAdblockRules().catch(e => console.error('[无极 SW] 清空自定义规则后重建失败:', e)); sendResponse({ success: true }); } catch (e) { sendResponse({ success: false, error: e.message }); } }
 async function handleAdblockWhitelistAdd(message, sender, sendResponse) {
   try {
     const domain = message.domain;
@@ -860,6 +1156,8 @@ async function handleAdblockWhitelistAdd(message, sender, sendResponse) {
       items.push({ domain, name: domain });
       await saveWhitelistItems(items);
       broadcastWhitelist({ items });
+      // 白名单变更必须重建 DNR，否则网络请求仍被拦截（白名单对 DNR 无效的根因）
+      initAdblockRules().catch(e => console.error('[无极 SW] 白名单后重建广告规则失败:', e));
     }
     sendResponse({ success: true, summary: `已将 ${domain} 加入广告过滤白名单` });
   } catch (e) { sendResponse({ success: false, error: e.message }); }
@@ -876,6 +1174,7 @@ async function handleAdblockWhitelistToggle(message, sender, sendResponse) {
     else { items.push({ domain, name: domain }); added = true; }
     await saveWhitelistItems(items);
     broadcastWhitelist({ items });
+    initAdblockRules().catch(e => console.error('[无极 SW] 白名单切换后重建广告规则失败:', e));
     sendResponse({ success: true, added, summary: added ? `已暂停屏蔽 ${domain} 的广告` : `已恢复屏蔽 ${domain} 的广告` });
   } catch (e) { sendResponse({ success: false, error: e.message }); }
 }
@@ -892,6 +1191,7 @@ async function handleAdblockWhitelistAddNamed(message, sender, sendResponse) {
     items.push({ domain, name: name || domain });
     await saveWhitelistItems(items);
     broadcastWhitelist({ items });
+    initAdblockRules().catch(e => console.error('[无极 SW] 白名单添加后重建广告规则失败:', e));
     sendResponse({ success: true, summary: `已添加 ${name || domain} 到白名单` });
   } catch (e) { sendResponse({ success: false, error: e.message }); }
 }
@@ -910,6 +1210,7 @@ async function handleAdblockWhitelistRemove(message, sender, sendResponse) {
     const filtered = items.filter(i => i.domain !== domain);
     await saveWhitelistItems(filtered);
     broadcastWhitelist({ items: filtered });
+    initAdblockRules().catch(e => console.error('[无极 SW] 白名单移除后重建广告规则失败:', e));
     sendResponse({ success: true });
   } catch (e) { sendResponse({ success: false, error: e.message }); }
 }
@@ -918,6 +1219,7 @@ async function handleAdblockWhitelistClear(message, sender, sendResponse) {
   try {
     await saveWhitelistItems([]);
     broadcastWhitelist({ items: [] });
+    initAdblockRules().catch(e => console.error('[无极 SW] 白名单清空后重建广告规则失败:', e));
     sendResponse({ success: true });
   } catch (e) { sendResponse({ success: false, error: e.message }); }
 }
@@ -950,7 +1252,7 @@ async function saveWhitelistItems(items) {
   await chrome.storage.local.set({ adblock_whitelist: { items } });
 }
 async function handleAdblockFetchRules(message, sender, sendResponse) {
-  try { const config = await getAPIConfig(); if (!config.apiKey) { sendResponse({ success: false, error: '请先配置 API Key' }); return; } const baseUrl = config.baseUrl.replace(/\/+$/, ''); const apiPath = config.provider === 'zhipu' ? '/v4/chat/completions' : '/v1/chat/completions'; const response = await fetch(`${baseUrl}${apiPath}`, { method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${config.apiKey}` }, body: JSON.stringify({ model: config.model, messages: [{ role: 'user', content: '你是广告过滤规则专家。生成 CSS 选择器规则用于广告屏蔽。返回 JSON 数组：[{"selector":"选择器","note":"说明"}]。不超过20条。' }], max_tokens: 4096, temperature: 0.5 }) }); if (!response.ok) { sendResponse({ success: false, error: `API ${response.status}` }); return; } const result = await response.json(); const content = result?.choices?.[0]?.message?.content || ''; let rules = []; try { const m = content.match(/\[[\s\S]*\]/); if (m) rules = JSON.parse(m[0]); } catch (e) {} const validRules = (rules || []).filter(r => r.selector && r.selector.length > 3).map(r => ({ selector: r.selector, note: r.note || 'AI 生成' })); if (validRules.length > 0) { const storageResult = await chrome.storage.sync.get('adblockConfig'); const adConfig = storageResult.adblockConfig || {}; const existingSelectors = new Set(adConfig.customRules || []); const newRules = validRules.map(r => r.selector).filter(s => !existingSelectors.has(s)); adConfig.customRules = [...(adConfig.customRules || []), ...newRules]; await chrome.storage.sync.set({ adblockConfig: adConfig }); sendResponse({ success: true, rules: validRules, newCount: newRules.length }); } else { sendResponse({ success: false, error: 'AI 未返回有效规则' }); } } catch (e) { sendResponse({ success: false, error: e.message }); }
+  try { const config = await getAPIConfig(); if (!config.apiKey) { sendResponse({ success: false, error: '请先配置 API Key' }); return; } const baseUrl = config.baseUrl.replace(/\/+$/, ''); const apiPath = config.provider === 'zhipu' ? '/v4/chat/completions' : '/v1/chat/completions'; const response = await fetch(`${baseUrl}${apiPath}`, { method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${config.apiKey}` }, body: JSON.stringify({ model: config.model, messages: [{ role: 'user', content: '你是广告过滤规则专家。生成 CSS 选择器规则用于广告屏蔽。返回 JSON 数组：[{"selector":"选择器","note":"说明"}]。不超过20条。' }], max_tokens: 4096, temperature: 0.5 }) }); if (!response.ok) { sendResponse({ success: false, error: `API ${response.status}` }); return; } const result = await response.json(); const content = result?.choices?.[0]?.message?.content || ''; let rules = []; try { const m = content.match(/\[[\s\S]*\]/); if (m) rules = JSON.parse(m[0]); } catch (e) {} const validRules = (rules || []).filter(r => r.selector && r.selector.length > 3).map(r => ({ selector: r.selector, note: r.note || 'AI 生成' })); if (validRules.length > 0) { const storageResult = await chrome.storage.sync.get('adblockConfig'); const adConfig = storageResult.adblockConfig || {}; const existingSelectors = new Set(adConfig.customRules || []); const newRules = validRules.map(r => r.selector).filter(s => !existingSelectors.has(s)); adConfig.customRules = [...(adConfig.customRules || []), ...newRules]; await chrome.storage.sync.set({ adblockConfig: adConfig }); initAdblockRules().catch(e => console.error('[无极 SW] AI 规则保存后重建失败:', e)); sendResponse({ success: true, rules: validRules, newCount: newRules.length }); } else { sendResponse({ success: false, error: 'AI 未返回有效规则' }); } } catch (e) { sendResponse({ success: false, error: e.message }); }
 }
 
 // ============================================================
@@ -965,8 +1267,15 @@ async function handleKBV2Save(message, sender, sendResponse) {
   } catch(e) { sendResponse({ success: false, error: e.message }); }
 }
 async function handleKBV2Search(message, sender, sendResponse) {
-  try { const results = await KBIndex.search(message.payload.query, message.payload.limit || 20); sendResponse({ success: true, data: results, total: results.length }); }
-  catch(e) { sendResponse({ success: false, error: e.message }); }
+  try {
+    const results = await KBIndex.search(message.payload.query, message.payload.limit || 20);
+    // 无结果时给出模糊搜索建议（"您是不是要找…"，WASM 编辑距离驱动）
+    let suggestions = [];
+    if (results.length === 0 && typeof KBIndex.suggest === 'function') {
+      try { suggestions = await KBIndex.suggest(message.payload.query, 3); } catch (e) { /* 建议失败不影响主结果 */ }
+    }
+    sendResponse({ success: true, data: results, suggestions, total: results.length });
+  } catch(e) { sendResponse({ success: false, error: e.message }); }
 }
 async function handleKBV2GetAll(message, sender, sendResponse) {
   try {
@@ -1091,8 +1400,26 @@ async function handleConsoleGetLogsDirect(tabId, filter) {
   return { success: true, summary: '共 ' + logs.length + ' 条日志', detail: recent.map(l => '[' + l.type + '] ' + l.text).join('\n').substring(0, 5000), data: { total: logs.length, recent } };
 }
 
+// console_eval 域名白名单：CDP 任意执行 JS 是最高危能力，
+// 默认全站拒绝，用户需在设置中显式添加允许的域名（如 www.bilibili.com）
+async function isDomainEvalAllowed(tabId) {
+  try {
+    const r = await chrome.storage.sync.get('agentSecurityConfig');
+    const allowlist = (r.agentSecurityConfig?.evalAllowlist || []).map(d => String(d).trim().toLowerCase()).filter(Boolean);
+    if (allowlist.length === 0) return { allowed: false, reason: '未启用「允许 AI 操作网页」，请在设置中为该网站授权' };
+    const tab = await chrome.tabs.get(tabId);
+    let hostname = '';
+    try { hostname = new URL(tab.url || tab.pendingUrl || '').hostname.toLowerCase(); } catch (e) { return { allowed: false, reason: '无法识别页面域名' }; }
+    if (!hostname) return { allowed: false, reason: '页面域名不可用' };
+    const hit = allowlist.some(d => hostname === d || hostname.endsWith('.' + d));
+    return hit ? { allowed: true } : { allowed: false, reason: `域名 ${hostname} 未授权网页操作，请在设置中添加` };
+  } catch (e) { return { allowed: false, reason: e.message }; }
+}
+
 async function handleConsoleEvalDirect(tabId, expression) {
   try {
+    const gate = await isDomainEvalAllowed(tabId);
+    if (!gate.allowed) return { success: false, summary: gate.reason };
     await handleConsoleAttachDirect(tabId);
     if (expression.length > 800) return { success: false, summary: '表达式过长（>800字符），请拆分' };
     if (/querySelectorAll\s*\(\s*['"]\*['"]/.test(expression)) {
@@ -1166,7 +1493,7 @@ async function handleConsoleGetHTMLDirect(tabId, selector) {
   } catch (e) { return { success: false, summary: '读取失败: ' + e.message }; }
 }
 
-/** 自适应智能操作：用 JSON.stringify 传参避免字符串注入 */
+/** 自适应操作：用 JSON.stringify 传参避免字符串注入 */
 async function handleConsoleSmartDirect(tabId, intent, selector) {
   try {
     if (!_consoleSessions[tabId]) await handleConsoleAttachDirect(tabId);
@@ -1368,13 +1695,16 @@ chrome.tabs.onRemoved.addListener((tabId) => {
 
 // 闹钟监听：安全网检查
 if (chrome.alarms) {
-  const _origAlarmListener = chrome.alarms.onAlarm.hasListeners ? null : null;
   chrome.alarms.onAlarm.addListener(async (alarm) => {
-    if (alarm.name === 'adblock-update') {
-      await initAdblockRules();
-    } else if (alarm.name === 'wuji-tab-suspend-check') {
-      TabSuspender.runSafetyCheck();
-    }
+    try {
+      if (alarm.name === 'adblock-update') {
+        await initAdblockRules();
+      } else if (alarm.name === 'wuji-tab-suspend-check') {
+        if (typeof TabSuspender !== 'undefined' && TabSuspender && typeof TabSuspender.runSafetyCheck === 'function') {
+          TabSuspender.runSafetyCheck();
+        }
+      }
+    } catch (e) { console.warn('[无极 SW] alarm 任务失败:', alarm?.name, e?.message || e); }
   });
 }
 
@@ -1400,7 +1730,15 @@ async function handleDanmakuCrawl(message, sender, sendResponse) {
 
     sendResponse({ success: true, status: 'crawling' });
     try {
-      const set = await DanmakuCrawler.crawlDanmaku(bvid, (progress) => {
+      // 读取 SESSDATA cookie 与完整模式配置（优先使用消息传入的值）
+      const cookie = message.cookie || (await DanmakuCrawler.getCookie());
+      if (message.cookie) await DanmakuCrawler.setCookie(message.cookie);
+      const options = {
+        cookie,
+        useHistory: !!message.useHistory,
+        pageIndex: message.pageIndex || 0
+      };
+      const set = await DanmakuCrawler.crawlDanmaku(bvid, options, (progress) => {
         console.log('[Danmaku]', progress.message);
       });
       await DanmakuCrawler.saveDanmakuSet(set);
@@ -1482,14 +1820,22 @@ async function handleDanmakuToggleInTab(message, sender, sendResponse) {
   } catch (e) { sendResponse({ success: false, error: e.message }); }
 }
 
-// 初始化标签页休眠
-TabSuspender.init().catch(() => {});
+// 初始化标签页休眠（importScripts 失败时模块缺失，降级跳过而非击穿 SW）
+if (typeof TabSuspender !== 'undefined' && TabSuspender && typeof TabSuspender.init === 'function') {
+  TabSuspender.init().catch(() => {});
+} else {
+  console.warn('[无极 SW] tab-suspender 模块加载失败，标签页休眠功能不可用');
+}
 
 // ============================================================
 // 启动
 // ============================================================
-initKBEngine().then(() => {
-  console.log('[无极 SW] 知识库引擎 V2 已就绪');
-  try { AgentPermissions.load(); } catch (e) {}
-});
+if (typeof initKBEngine === 'function') {
+  initKBEngine().then(() => {
+    console.log('[无极 SW] 知识库引擎 V2 已就绪');
+    try { AgentPermissions.load(); } catch (e) {}
+  }).catch(e => console.warn('[无极 SW] 知识库引擎初始化失败:', e?.message || e));
+} else {
+  console.warn('[无极 SW] kb-core 模块加载失败，知识库功能不可用');
+}
 console.log('[无极 SW] Service Worker 已启动');

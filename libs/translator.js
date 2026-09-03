@@ -1,7 +1,7 @@
 /**
- * 无极 — 沉浸式翻译模块 V4.0
+ * 无极 — 网页翻译模块 V5.0
  * 借鉴 FluentRead (github.com/Bistutu/FluentRead) 核心架构：
- *   1. TreeWalker + grabNode 智能节点发现（内联元素递归找父节点）
+ *   1. TreeWalker + grabNode 节点发现（内联元素递归找父节点）
  *   2. bilingualAppendChild 非破坏性译文追加
  *   3. IntersectionObserver 懒加载（只翻译可见区域）
  *   4. MutationObserver 动态内容实时翻译
@@ -47,6 +47,14 @@
 
   function escHtml(t) { const d = document.createElement('div'); d.textContent = t || ''; return d.innerHTML; }
   function detectLang(text) {
+    // 优先 WebAssembly 内核（手写 WAT，字节级统计），加载失败自动降级 JS 实现
+    if (typeof WasmKernels !== 'undefined' && WasmKernels.langDetect) {
+      const code = WasmKernels.langDetect(text);
+      if (code === 1) return 'zh';
+      if (code === 2) return 'ja';
+      if (code === 3) return 'ko';
+      return 'en';
+    }
     const cn = (text.match(/[\u4e00-\u9fa5]/g) || []).length;
     const total = text.replace(/\s/g, '').length || 1;
     if (cn / total > 0.25) return 'zh';
@@ -88,11 +96,33 @@
     const tag = node.tagName.toLowerCase();
     if (SKIP_TAGS.has(tag)) return true;
     if (node.classList?.contains('notranslate') || node.classList?.contains('sr-only') || node.isContentEditable) return true;
+    if (node.getAttribute('aria-hidden') === 'true' || node.hasAttribute('hidden')) return true;
     if (node.hasAttribute(ATTR_TRANSLATED) || node.getAttribute('translate') === 'no') return true;
     if (checkTextSize(node) || isNumericContent(node)) return true;
     if (node.closest('#' + PREFIX + '-popup') || node.closest('#wuji-chat-host')) return true;
     try { const s = getComputedStyle(node); if (s.display === 'none' || s.visibility === 'hidden' || s.opacity === '0') return true; } catch (e) {}
     return false;
+  }
+
+  // ============================================================
+  // 原子块判定：直接子节点只含文本/行内元素（br 除外）的"原子文本块"
+  // 翻译以原子块为最小单位，任何外层容器若嵌有块级子节点一律不整体翻译
+  // （否则父容器与子节点重复翻译，出现截图中的乱序堆叠）
+  // ============================================================
+  function hasBlockChild(el) {
+    if (!el.childNodes) return false;
+    for (const c of el.childNodes) {
+      if (c.nodeType === Node.TEXT_NODE) continue;
+      if (c.nodeType !== Node.ELEMENT_NODE) continue;
+      const tag = c.tagName.toLowerCase();
+      if (tag === 'br' || tag === 'wbr') continue;
+      if (!INLINE_SET.has(tag)) return true;
+    }
+    return false;
+  }
+
+  function isAtomicBlock(node) {
+    return node ? !hasBlockChild(node) : false;
   }
 
   // ============================================================
@@ -103,8 +133,14 @@
     while (current) {
       if (shouldSkipNode(current)) return null;
       const tag = current.tagName.toLowerCase();
-      if (DIRECT_SET.has(tag)) return current;
-      if (!INLINE_SET.has(tag) && current.textContent?.trim().length > 3) return current;
+      if (DIRECT_SET.has(tag)) {
+        // 只有原子文本块才整体翻译；含块级子节点（如 li 内嵌 ul）交给子块
+        return isAtomicBlock(current) ? current : null;
+      }
+      if (!INLINE_SET.has(tag)) {
+        if (isAtomicBlock(current) && current.textContent?.trim().length > 3) return current;
+        return null;
+      }
       current = current.parentElement;
     }
     return null;
@@ -114,25 +150,26 @@
     if (!node) return null;
     // 文本节点
     if (node.nodeType === Node.TEXT_NODE) {
-      const parent = findTranslatableParent(node);
-      return parent;
+      return findTranslatableParent(node);
     }
     if (!node.tagName) return null;
     const tag = node.tagName.toLowerCase();
     if (shouldSkipNode(node)) return null;
-
-    // 块级元素直接翻译
-    if (DIRECT_SET.has(tag)) return node;
-
-    // 内联元素 → 向上找父节点
-    if (INLINE_SET.has(tag)) {
-      const parent = findTranslatableParent(node);
-      if (parent) return parent;
-      return null;
+    if (node.hasAttribute(ATTR_TRANSLATED)) return null;
+    for (let anc = node.parentElement; anc; anc = anc.parentElement) {
+      if (anc.hasAttribute && anc.hasAttribute(ATTR_TRANSLATED)) return null;
     }
 
-    // div/label 等容器 → 检查首行文本
-    return node;
+    const atomic = isAtomicBlock(node);
+
+    // 块级元素：仅原子块可翻译
+    if (DIRECT_SET.has(tag)) return atomic ? node : null;
+
+    // 内联元素 → 向上找原子块父节点
+    if (INLINE_SET.has(tag)) return findTranslatableParent(node);
+
+    // td/div 等容器：只有原子文本块才翻译，含块级子节点的交给子节点
+    return atomic && node.textContent?.trim().length > 2 ? node : null;
   }
 
   // ============================================================
@@ -369,6 +406,7 @@
       if (!target || target.closest('#' + PREFIX + '-popup') || target.closest('#wuji-chat-host')) return;
       const text = (target.textContent || '').trim();
       if (text.length < 10 || text.length > 500) return;
+      if (shouldSkipLang(text)) return;
       if (hoverTimer) clearTimeout(hoverTimer);
       hoverTimer = setTimeout(async () => {
         if (config.cacheEnabled && transCache.has(text)) {
@@ -434,6 +472,8 @@
   // 初始化
   // ============================================================
   async function init() {
+    // 预加载 WASM 内核（语言检测加速；失败自动降级 JS 实现）
+    try { if (typeof WasmKernels !== 'undefined' && WasmKernels.init) WasmKernels.init(); } catch (e) {}
     try {
       const r = await chrome.storage.sync.get('translatorConfig');
       if (r.translatorConfig) config = { ...config, ...r.translatorConfig };

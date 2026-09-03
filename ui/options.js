@@ -29,13 +29,15 @@ document.querySelectorAll('.toggle').forEach(toggle => {
 });
 
 // ============================================================
-// 通用状态提示
+// 通用状态提示（记录 timeout，防止旧消息的定时器误清新消息）
 // ============================================================
+const _statusTimers = {};
 function showStatus(id, text, type) {
   const el = document.getElementById(id);
   if (!el) return;
+  if (_statusTimers[id]) clearTimeout(_statusTimers[id]);
   el.textContent = text; el.className = 'status-msg show ' + type;
-  setTimeout(() => { el.classList.remove('show'); }, 3000);
+  _statusTimers[id] = setTimeout(() => { el.classList.remove('show'); }, 3000);
 }
 
 function esc(s) { const d = document.createElement('div'); d.textContent = s || ''; return d.innerHTML; }
@@ -107,7 +109,7 @@ document.getElementById('test-llm-btn').addEventListener('click', async () => {
   try {
     const baseUrl = config.baseUrl.replace(/\/+$/, '');
     const path = config.provider === 'zhipu' ? '/v4/chat/completions' : '/v1/chat/completions';
-    const resp = await fetch(`${baseUrl}${path}`, { method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${config.apiKey}` }, body: JSON.stringify({ model: config.model, messages: [{ role: 'user', content: 'ping' }], max_tokens: 5 }) });
+    const resp = await fetch(`${baseUrl}${path}`, { method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${config.apiKey}` }, body: JSON.stringify({ model: config.model, messages: [{ role: 'user', content: 'ping' }], max_tokens: 5 }), signal: AbortSignal.timeout(10000) });
     if (resp.ok) showStatus('llm-status', '连接成功！API 可用', 'success');
     else { const err = await resp.text(); showStatus('llm-status', `API 返回错误 ${resp.status}: ${err.substring(0, 100)}`, 'error'); }
   } catch (e) { showStatus('llm-status', '连接失败: ' + e.message, 'error'); }
@@ -162,7 +164,7 @@ document.getElementById('test-vision-btn').addEventListener('click', async () =>
   try {
     const baseUrl = config.visionBaseUrl.replace(/\/+$/, '');
     const path = config.visionProvider === 'zhipu' ? '/v4/chat/completions' : '/v1/chat/completions';
-    const resp = await fetch(`${baseUrl}${path}`, { method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${config.visionApiKey}` }, body: JSON.stringify({ model: config.visionModel, messages: [{ role: 'user', content: 'ping' }], max_tokens: 5 }) });
+    const resp = await fetch(`${baseUrl}${path}`, { method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${config.visionApiKey}` }, body: JSON.stringify({ model: config.visionModel, messages: [{ role: 'user', content: 'ping' }], max_tokens: 5 }), signal: AbortSignal.timeout(10000) });
     if (resp.ok) showStatus('vision-status', '连接成功！', 'success');
     else { const err = await resp.text(); showStatus('vision-status', `错误 ${resp.status}: ${err.substring(0, 100)}`, 'error'); }
   } catch (e) { showStatus('vision-status', '连接失败: ' + e.message, 'error'); }
@@ -194,7 +196,7 @@ const tranProviderDefaults = {
 
 function getTranApiConfig() {
   const provider = document.getElementById('tran-provider-select').value;
-  return { provider, apiKey: document.getElementById('tran-api-key').value, model: document.getElementById('tran-model-input').value, baseUrl: document.getElementById('tran-base-url').value || (tranProviderDefaults[provider]?.baseUrl || '') };
+  return { engine: document.getElementById('tran-engine-select').value, provider, apiKey: document.getElementById('tran-api-key').value, model: document.getElementById('tran-model-input').value, baseUrl: document.getElementById('tran-base-url').value || (tranProviderDefaults[provider]?.baseUrl || '') };
 }
 
 async function loadTranslateConfig() {
@@ -209,6 +211,7 @@ async function loadTranslateConfig() {
     document.getElementById('tran-font-size').value = c.fontSize || '13px';
     const tApi = await chrome.storage.sync.get('translatorApiConfig');
     const tApiConfig = tApi.translatorApiConfig || {};
+    document.getElementById('tran-engine-select').value = tApiConfig.engine || (tApiConfig.apiKey ? 'ai' : 'auto');
     document.getElementById('tran-provider-select').value = tApiConfig.provider || 'deepseek';
     document.getElementById('tran-api-key').value = tApiConfig.apiKey || '';
     document.getElementById('tran-model-input').value = tApiConfig.model || '';
@@ -225,6 +228,34 @@ document.getElementById('tran-provider-select').addEventListener('change', () =>
 
 async function testTranApi() {
   const config = getTranApiConfig();
+  // 免费引擎：直接测试 Google/微软接口
+  if (config.engine !== 'ai') {
+    try {
+      const engineName = config.engine === 'microsoft' ? 'Microsoft 翻译' : config.engine === 'google' ? 'Google 翻译' : '免费翻译引擎（Google → 微软）';
+      showStatus('tran-status', '正在测试 ' + engineName + '...', 'info');
+      let resp;
+      try {
+        const url = 'https://translate.googleapis.com/translate_a/single?client=gtx&dt=t&sl=auto&tl=zh-CN&q=' + encodeURIComponent('Hello, this is a test.');
+        resp = await fetch(url, { signal: AbortSignal.timeout(10000) });
+        if (resp.ok) {
+          const data = await resp.json();
+          const text = (Array.isArray(data?.[0]) ? data[0] : []).map(s => (Array.isArray(s) && s[0]) ? s[0] : '').join('');
+          showStatus('tran-status', 'Google 翻译接口连接成功！｜' + text, 'success');
+          return;
+        }
+      } catch (e) {}
+      const auth = await fetch('https://edge.microsoft.com/translate/auth', { signal: AbortSignal.timeout(10000) }).then(r => { if (!r.ok) throw new Error('HTTP ' + r.status); return r.text(); });
+      const msResp = await fetch('https://api-edge.cognitive.microsofttranslator.com/translate?api-version=3.0&to=zh-Hans', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Ocp-Apim-Subscription-Key': auth.trim(), 'Or-Referer': 'https://cn.bing.com' },
+        body: JSON.stringify([{ Text: 'Hello, this is a test.' }])
+      });
+      if (!msResp.ok) throw new Error('HTTP ' + msResp.status);
+      const msData = await msResp.json();
+      showStatus('tran-status', 'Microsoft 翻译接口连接成功！｜' + (msData?.[0]?.translations?.[0]?.text || ''), 'success');
+    } catch (e) { showStatus('tran-status', '免费翻译接口均不可用: ' + e.message, 'error'); }
+    return;
+  }
   let apiKey = config.apiKey;
   if (!apiKey) {
     const r = await chrome.storage.sync.get('apiConfig');
@@ -235,7 +266,7 @@ async function testTranApi() {
   try {
     const baseUrl = (config.baseUrl || 'https://api.deepseek.com').replace(/\/+$/, '');
     const path = config.provider === 'zhipu' ? '/v4/chat/completions' : '/v1/chat/completions';
-    const resp = await fetch(`${baseUrl}${path}`, { method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${apiKey}` }, body: JSON.stringify({ model: config.model || 'deepseek-chat', messages: [{ role: 'user', content: 'ping' }], max_tokens: 5 }) });
+    const resp = await fetch(`${baseUrl}${path}`, { method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${apiKey}` }, body: JSON.stringify({ model: config.model || 'deepseek-chat', messages: [{ role: 'user', content: 'ping' }], max_tokens: 5 }), signal: AbortSignal.timeout(10000) });
     if (resp.ok) showStatus('tran-status', '翻译 API 连接成功！', 'success');
     else { const err = await resp.text(); showStatus('tran-status', `API 返回错误 ${resp.status}: ${err.substring(0, 100)}`, 'error'); }
   } catch (e) { showStatus('tran-status', '连接失败: ' + e.message, 'error'); }
@@ -319,9 +350,22 @@ document.getElementById('clear-chat-cache-btn').addEventListener('click', async 
 });
 
 document.getElementById('reset-all-btn').addEventListener('click', async () => {
-  if (!confirm('确定重置全部配置？这将清除所有 API 设置。此操作不可恢复！')) return;
-  try { await chrome.storage.sync.clear(); await chrome.storage.local.clear(); setTimeout(() => window.location.reload(), 500); showStatus('cache-status', '全部配置已重置，页面即将刷新', 'success'); }
-  catch (e) { showStatus('cache-status', '重置失败', 'error'); }
+  // 只清除配置类数据，绝不触碰用户数据（弹幕集/知识库/翻译缓存/休眠映射）
+  if (!confirm('确定重置全部配置？这将清除所有 API 设置和功能开关（知识库、弹幕集等数据会保留）。此操作不可恢复！')) return;
+  try {
+    const r = await chrome.storage.sync.get(null);
+    const syncKeys = Object.keys(r || {});
+    if (syncKeys.length) await chrome.storage.sync.remove(syncKeys);
+    // local 侧只清除配置键，保留 danmaku_set_* / suspend_data_* / translatorCache / 知识库
+    const lr = await chrome.storage.local.get(null);
+    const localConfigKeys = Object.keys(lr || {}).filter(k =>
+      k.startsWith('kb_settings') || k.startsWith('adblock_') || k === 'adblockConfig'
+    );
+    if (localConfigKeys.length) await chrome.storage.local.remove(localConfigKeys);
+    setTimeout(() => window.location.reload(), 500);
+    showStatus('cache-status', '全部配置已重置（用户数据已保留），页面即将刷新', 'success');
+  }
+  catch (e) { showStatus('cache-status', '重置失败: ' + e.message, 'error'); }
 });
 
 // ============================================================
@@ -479,6 +523,11 @@ async function loadAgentPermissions() {
       document.getElementById('agent-can-execute-commands').classList.toggle('on', perms.can_execute_commands === true);
       document.getElementById('agent-auto-tag').classList.toggle('on', perms.can_auto_tag === true);
     }
+    // AI 网页操作域名白名单 + 自动记忆页面（直接读 storage）
+    const r = await chrome.storage.sync.get(['agentSecurityConfig', 'privacyConfig']);
+    const sec = r.agentSecurityConfig || {};
+    document.getElementById('agent-eval-allowlist').value = (sec.evalAllowlist || []).join('\n');
+    document.getElementById('privacy-auto-save-pages').classList.toggle('on', r.privacyConfig?.autoSavePages === true);
   } catch(e) { /* ignore */ }
 }
 
@@ -492,7 +541,13 @@ document.getElementById('save-agent-perms-btn').addEventListener('click', async 
   };
   try {
     const resp = await chrome.runtime.sendMessage({ type: 'KB_V2_AGENT_PERMISSIONS', payload: { action: 'save', permissions: perms } });
-    if (resp?.success) showStatus('agent-status', 'Agent 权限已保存', 'success');
+    // 域名白名单 + 隐私开关（独立于 Agent 权限消息）
+    const allowlistText = document.getElementById('agent-eval-allowlist').value || '';
+    const evalAllowlist = allowlistText.split(/[\s\n,]+/).map(d => d.trim()).filter(Boolean);
+    await chrome.storage.sync.set({ agentSecurityConfig: { evalAllowlist } });
+    const autoSavePages = document.getElementById('privacy-auto-save-pages').classList.contains('on');
+    await chrome.storage.sync.set({ privacyConfig: { autoSavePages } });
+    if (resp?.success) showStatus('agent-status', 'Agent 权限与安全设置已保存', 'success');
     else showStatus('agent-status', '保存失败', 'error');
   } catch(e) { showStatus('agent-status', '保存失败: ' + e.message, 'error'); }
 });

@@ -16,6 +16,9 @@
   let observer = null;           // MutationObserver
   const HIDDEN_ATTR = 'data-adblock-hidden';
   let whitelistDomains = [];
+  // CSS 声明式引擎：把全部选择器分块合并成 :is() 复合选择器，
+  // 一次 matches()/querySelector() 顶替逐选择器循环（O(1) 分块匹配，非 O(选择器数)）
+  let selectorChunks = [];
 
   function isDomainWhitelisted() {
     if (whitelistDomains.length === 0) return false;
@@ -33,7 +36,6 @@
     '.ytp-skip-ad-button',
     '.ytp-ad-skip-button-container',
     '.videoAdUiSkipButton',
-    '.ytp-ad-overlay-close-button',
     '[class*="ytp-ad-skip"]',
   ];
 
@@ -43,7 +45,6 @@
     /skip[-_]?ad[-_]?button/i,
     /ad[-_]?skip[-_]?button/i,
     /video[-_]?ad[-_]?skip/i,
-    /\.ytp-ad-/i,
   ];
 
   /**
@@ -127,6 +128,8 @@
 
     if (cssRules.length > 0) {
       styleElement.textContent = cssRules.join('\n');
+    } else {
+      styleElement.textContent = '';
     }
   }
 
@@ -136,12 +139,14 @@
   function updateForCurrentPage() {
     if (!enabled) {
       if (styleElement) styleElement.textContent = '';
+      selectorChunks = [];
       return;
     }
 
     // 检查白名单 — 白名单域名跳过所有过滤
     if (isDomainWhitelisted()) {
       if (styleElement) styleElement.textContent = '';
+      selectorChunks = [];
       return;
     }
 
@@ -157,8 +162,23 @@
       }
 
       injectCSS(selectors);
+      rebuildSelectorChunks(selectors);
     } catch (e) {
       // ignore
+    }
+  }
+
+  /**
+   * 重建 :is() 分块复合选择器（每块 200 条，:is 宽容语法自动丢弃非法条目）
+   */
+  function rebuildSelectorChunks(selectors) {
+    selectorChunks = [];
+    const clean = selectors
+      .filter(sel => !isProtectedSelector(sel))
+      .map(sel => sel.replace(/[{}]/g, '').trim())
+      .filter(Boolean);
+    for (let i = 0; i < clean.length; i += 200) {
+      selectorChunks.push(clean.slice(i, i + 200).join(', '));
     }
   }
 
@@ -204,7 +224,7 @@
       childList: true,
       subtree: true,
       attributes: true,
-      attributeFilter: ['class', 'id', 'style', 'src', 'data-*']
+      attributeFilter: ['class', 'id', 'style', 'src']
     });
   }
 
@@ -217,6 +237,8 @@
 
   /**
    * 检查单个元素是否匹配过滤规则并隐藏
+   * 用 :is() 分块复合选择器做 O(分块数) 匹配；实际隐藏由注入的 CSS 样式表完成，
+   * 这里仅做标记（供统计）+ 内联样式兜底。
    */
   function checkAndHideElement(element) {
     if (!enabled || element.hasAttribute(HIDDEN_ATTR)) return;
@@ -226,35 +248,23 @@
     if (isProtectedElement(element)) return;
 
     try {
-      const allSelectors = [...globalSelectors];
-      const hostname = window.location.hostname;
-      for (const [domainPattern, rules] of Object.entries(domainSelectors)) {
-        if (matchHostname(hostname, domainPattern)) {
-          allSelectors.push(...rules);
-        }
-      }
-
-      for (const sel of allSelectors) {
+      // 1. 元素自身命中任一选择器 → 标记（CSS 样式表负责视觉隐藏）
+      for (const chunk of selectorChunks) {
         try {
-          // 🔑 跳过受保护的选择器（防止在 CSS 注入阶段被隐藏）
-          if (isProtectedSelector(sel)) continue;
-
-          if (element.matches(sel) || element.querySelector(sel)) {
-            if (element.matches(sel)) {
-              element.style.cssText = element.style.cssText + ';display:none!important;visibility:hidden!important;';
-              element.setAttribute(HIDDEN_ATTR, '1');
-            }
-            // 隐藏内部匹配的子元素（但排除受保护的元素）
-            const matches = element.querySelectorAll(sel);
-            matches.forEach(m => {
-              if (!m.hasAttribute(HIDDEN_ATTR) && !isProtectedElement(m)) {
-                m.style.cssText = m.style.cssText + ';display:none!important;visibility:hidden!important;';
-                m.setAttribute(HIDDEN_ATTR, '1');
-              }
-            });
-            break;
+          if (element.matches(chunk)) {
+            element.setAttribute(HIDDEN_ATTR, '1');
+            return;
           }
-        } catch (e) { /* 选择器无效，跳过 */ }
+        } catch (e) { /* 该块含非法选择器，:is 已宽容丢弃 */ }
+      }
+      // 2. 容器命中（后代选择器如 .ad-box .ad）：统计标记匹配的后代
+      for (const chunk of selectorChunks) {
+        try {
+          const hit = element.querySelector(':is(' + chunk + ')');
+          if (hit && !hit.hasAttribute(HIDDEN_ATTR) && !isProtectedElement(hit)) {
+            hit.setAttribute(HIDDEN_ATTR, '1');
+          }
+        } catch (e) { /* ignore */ }
       }
     } catch (e) { /* ignore */ }
   }

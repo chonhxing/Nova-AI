@@ -73,7 +73,7 @@
   <div class="sidebar">
     <div class="brand">
       <div class="logo"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg></div>
-      <div><div class="name">无极</div><div class="ver">v3.3.0</div></div>
+      <div><div class="name">无极</div><div class="ver">v3.4.0</div></div>
     </div>
     <div class="nav">
       <button class="nav-item active" data-section="sec-llm"><span class="icon"><svg viewBox="0 0 24 24"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg></span> 语言模型</button>
@@ -117,13 +117,14 @@
     <!-- 网页翻译 -->
     <div class="section" id="sec-translate">
       <div class="section-title">🌐 网页翻译</div>
-      <div class="section-desc">沉浸式双语对照翻译，使用语言模型 API</div>
+      <div class="section-desc">双语对照翻译，免费 Google/Microsoft 引擎直接用，也可以接 AI 模型</div>
       <div class="toggle-row"><span class="toggle-label">鼠标悬停翻译</span><div class="toggle on" id="tran-hover-toggle"></div></div>
       <div class="toggle-row"><span class="toggle-label">输入框翻译</span><div class="toggle" id="tran-input-toggle"></div></div>
       <div class="form-group"><label>目标语言</label><select id="tran-target-lang"><option value="zh-CN">简体中文</option><option value="zh-TW">繁体中文</option><option value="en">English</option><option value="ja">日本語</option><option value="ko">한국어</option><option value="fr">Français</option><option value="de">Deutsch</option><option value="es">Español</option></select></div>
       <div class="form-group"><label>显示模式</label><select id="tran-display-mode"><option value="bilingual">双语对照（上原文下译文）</option><option value="translation">仅显示译文</option></select></div>
       <div class="form-group"><label>译文颜色</label><input type="color" id="tran-color" value="#6366f1"></div>
       <div class="form-group"><label>译文字号</label><select id="tran-font-size"><option value="12px">12px</option><option value="13px" selected>13px</option><option value="14px">14px</option><option value="15px">15px</option></select></div>
+      <div class="form-group"><label>翻译引擎</label><select id="tran-engine-select"><option value="auto">自动（Google → 微软翻译，均免费，推荐）</option><option value="google">Google 翻译（免费）</option><option value="microsoft">Microsoft 翻译（免费）</option><option value="ai">AI 模型翻译（更贴合语境，需 API Key）</option></select><div class="hint">免费引擎无需任何配置；AI 引擎请求失败会自动降级到免费引擎</div></div>
       <div class="form-group"><label>翻译引擎服务商</label><select id="tran-provider-select"><optgroup label="国内"><option value="deepseek">DeepSeek</option><option value="qwen">阿里 · 通义千问</option><option value="zhipu">智谱 · GLM</option><option value="moonshot">月之暗面 · Kimi</option><option value="spark">讯飞 · 星火</option><option value="yi">零一万物 · Yi</option><option value="wenxin">百度 · 文心一言</option><option value="minimax">MiniMax</option><option value="baichuan">百川智能</option><option value="stepfun">阶跃星辰</option><option value="siliconflow">硅基流动</option></optgroup><optgroup label="国外"><option value="openai">OpenAI</option><option value="claude">Anthropic · Claude</option><option value="groq">Groq</option><option value="mistral">Mistral</option><option value="cohere">Cohere</option><option value="perplexity">Perplexity</option></optgroup><optgroup label="其他"><option value="custom">自定义服务商</option></optgroup></select></div>
       <div class="form-group"><label>翻译 API Key</label><input type="password" id="tran-api-key" placeholder="翻译专用 API Key（留空复用语言模型）" autocomplete="off"><div class="hint">留空则使用语言模型的 API Key</div></div>
       <div class="form-group"><label>翻译模型</label><input type="text" id="tran-model-input" placeholder="如 deepseek-chat" autocomplete="off"><div class="hint">推荐使用性价比高的模型，如 deepseek-chat</div></div>
@@ -149,7 +150,7 @@
     <!-- 广告过滤 -->
     <div class="section" id="sec-adblock">
       <div class="section-title">🛡 广告过滤</div>
-      <div class="section-desc">基于 EasyList China 规则 + AI 智能增强，自动拦截广告</div>
+      <div class="section-desc">EasyList China 规则 + 自定义规则，拦截广告请求和隐藏广告元素</div>
 
       <div class="toggle-row"><span class="toggle-label">启用广告过滤</span><div class="toggle on" id="adblock-enabled-toggle"></div></div>
 
@@ -201,6 +202,11 @@
       <div class="toggle-row"><span class="toggle-label">网页搜索</span><div class="toggle on" id="agent-can-web-search"></div></div>
       <div class="toggle-row"><span class="toggle-label">执行命令（需审批）</span><div class="toggle" id="agent-can-execute-commands"></div></div>
       <div class="toggle-row"><span class="toggle-label">自动标签</span><div class="toggle" id="agent-auto-tag"></div></div>
+      <div class="form-group" style="margin-top:16px;"><label>允许 AI 操作网页的域名（每行一个，如 www.bilibili.com）</label>
+        <textarea id="agent-eval-allowlist" rows="3" style="width:100%;font-family:inherit;font-size:13px;padding:8px;border-radius:8px;border:1px solid var(--border);background:var(--bg-input);color:var(--text-primary);resize:vertical;" placeholder="默认全站禁止。列出后，AI 可在该域名内点击元素、读取页面结构、填写输入框。"></textarea>
+        <div class="hint">v3.4 起 AI 网页操作默认全站拒绝（安全加固），只有在此列出的域名才被允许</div>
+      </div>
+      <div class="toggle-row"><span class="toggle-label">自动记忆访问页面（隐私，默认关闭）</span><div class="toggle" id="privacy-auto-save-pages"></div></div>
       <div class="btn-row"><button class="btn btn-primary" id="save-agent-perms-btn">保存权限</button></div>
       <div class="status-msg" id="agent-status"></div>
     </div>
@@ -251,11 +257,11 @@
     <!-- 关于 -->
     <div class="section" id="sec-about">
       <div class="section-title">ℹ️ 关于无极</div>
-      <div class="section-desc">无极 — 智能 AI 浏览器助手</div>
+      <div class="section-desc">无极 — 浏览器助手</div>
       <div style="font-size:13px;color:var(--text-secondary);line-height:2;">
-        <div>版本：v3.3.0</div>
-        <div>功能：AI 对话 · 沉浸式网页翻译 · 图片识别 · 视频摘要 · PDF 保存 · 知识库 V2 · 全文搜索 · 标签系统 · 高亮批注 · 知识图谱 · AI Agent · 广告过滤 · 标签页休眠</div>
-        <div>技术栈：Manifest V3 · Shadow DOM · IndexedDB · FTS 倒排索引 · RAG · OpenAI Compatible API · DNR</div>
+        <div>版本：v3.4.0</div>
+        <div>功能：网页翻译 · AI 对话 · 图片识别 · 视频摘要 · PDF 保存 · 知识库 · 全文搜索 · 标签 · 高亮批注 · 知识图谱 · Agent · 广告过滤 · 标签页休眠</div>
+        <div>技术栈：Manifest V3 · Shadow DOM · IndexedDB · FTS 倒排索引 · RAG · OpenAI Compatible API · DNR · WebAssembly</div>
       </div>
     </div>
   </div>

@@ -19,9 +19,7 @@ const AdblockParser = {
     line = line.trim();
     
     // 跳过空行和注释
-    if (!line || line.startsWith('!') || line.startsWith('#')) return null;
-    // 跳过非标准规则头
-    if (line.startsWith('[')) return null;
+    if (!line || line.startsWith('!') || line.startsWith('[')) return null;
 
     const result = { raw: line, type: null };
 

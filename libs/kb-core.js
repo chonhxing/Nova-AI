@@ -220,6 +220,59 @@ function _dbCount(storeName) {
   });
 }
 
+/**
+ * 单事务读-改-写（避免跨事务 RMW 丢更新）
+ */
+function _dbRMW(storeName, id, mutateFn) {
+  return new Promise((resolve, reject) => {
+    openKBDB().then(db => {
+      try {
+        const tx = db.transaction(storeName, 'readwrite');
+        const store = tx.objectStore(storeName);
+        const req = store.get(id);
+        req.onsuccess = () => {
+          try {
+            const updated = mutateFn(req.result);
+            if (updated === null || updated === undefined) { db.close(); resolve(null); return; }
+            store.put(updated);
+            tx.oncomplete = () => { db.close(); resolve(updated); };
+            tx.onabort = () => { db.close(); reject(tx.error || new Error('事务中止')); };
+            tx.onerror = () => { db.close(); reject(tx.error || new Error('事务错误')); };
+          } catch (e) { db.close(); reject(e); }
+        };
+        req.onerror = () => { db.close(); reject(req.error); };
+      } catch (e) { db.close(); reject(e); }
+    }).catch(reject);
+  });
+}
+
+/**
+ * 通过索引删除所有匹配记录（单事务，不受 limit 截断影响）
+ * 返回删除条数
+ */
+function _dbDeleteWhere(storeName, indexName, value) {
+  return new Promise((resolve, reject) => {
+    openKBDB().then(db => {
+      try {
+        const tx = db.transaction(storeName, 'readwrite');
+        const store = tx.objectStore(storeName);
+        if (!store.indexNames.contains(indexName)) { db.close(); resolve(0); return; }
+        const idx = store.index(indexName);
+        const req = idx.openKeyCursor(IDBKeyRange.only(value));
+        let count = 0;
+        req.onsuccess = (ev) => {
+          const cursor = ev.target.result;
+          if (!cursor) { db.close(); resolve(count); return; }
+          store.delete(cursor.primaryKey);
+          count++;
+          cursor.continue();
+        };
+        req.onerror = () => { db.close(); reject(req.error); };
+      } catch (e) { db.close(); reject(e); }
+    }).catch(reject);
+  });
+}
+
 // ============================================================
 // 1. 核心条目操作（Item CRUD）
 // ============================================================
@@ -255,9 +308,10 @@ const KBItem = {
       await KBBlock.extract(id, data.content || '', data.content);
     } catch(e) { /* non-critical */ }
 
-    // 更新 FTS 索引
+    // 更新 FTS 索引（token 列表持久化到条目，供 update/delete 反查）
     try {
-      await KBIndex.updateIndex(id, record.title, record.content, record.url);
+      const tokens = await KBIndex.updateIndex(id, record.title, record.content, record.url);
+      await _dbRMW('kb_items', id, item => item ? { ...item, _tokens: tokens } : null);
     } catch(e) { /* non-critical */ }
 
     return id;
@@ -272,36 +326,33 @@ const KBItem = {
   },
 
   async update(id, updates) {
-    const existing = await _dbGet('kb_items', id);
-    if (!existing) throw new Error('条目不存在');
-    const updated = { ...existing, ...updates, id: existing.id };
-    await _dbPut('kb_items', updated);
+    const updated = await _dbRMW('kb_items', id, existing => {
+      if (!existing) throw new Error('条目不存在');
+      return { ...existing, ...updates, id: existing.id };
+    });
+    // 标题/内容变更时差异重建索引，避免检索结果与内容漂移
+    if (updates.title !== undefined || updates.content !== undefined) {
+      try {
+        const oldTokens = updated._tokens || [];
+        const tokens = await KBIndex.updateIndex(id, updated.title || '', updated.content || '', updated.url || '', oldTokens);
+        await _dbRMW('kb_items', id, item => item ? { ...item, _tokens: tokens } : null);
+      } catch (e) { /* 索引更新失败不影响条目更新 */ }
+    }
     return updated;
   },
 
   async delete(id) {
-    // 级联删除关联数据
+    // 先取条目（含 _tokens）用于索引清理
+    const item = await _dbGet('kb_items', id);
     await _dbDelete('kb_items', id);
-    // 删除内容块
-    const blocks = await _dbGetAll('kb_item_blocks', 1000, 0, 'item_id');
-    for (const b of blocks.filter(b => b.item_id === id)) {
-      await _dbDelete('kb_item_blocks', b.id);
-    }
-    // 删除高亮
-    const highlights = await _dbGetAll('kb_highlights', 1000, 0, 'item_id');
-    for (const h of highlights.filter(h => h.item_id === id)) {
-      await _dbDelete('kb_highlights', h.id);
-    }
-    // 删除笔记
-    const notes = await _dbGetAll('kb_page_notes', 1000, 0, 'item_id');
-    for (const n of notes.filter(n => n.item_id === id)) {
-      await _dbDelete('kb_page_notes', n.id);
-    }
-    // 删除标签关联
-    const links = await _dbGetAll('kb_item_tag_links', 1000, 0, 'item_id');
-    for (const l of links.filter(l => l.item_id === id)) {
-      await _dbDelete('kb_item_tag_links', [l.item_id, l.tag_id]);
-    }
+    // 级联删除：走 item_id 索引游标，不受 1000 条截断影响
+    await _dbDeleteWhere('kb_item_blocks', 'item_id', id);
+    await _dbDeleteWhere('kb_highlights', 'item_id', id);
+    await _dbDeleteWhere('kb_page_notes', 'item_id', id);
+    await _dbDeleteWhere('kb_item_tag_links', 'item_id', id);
+    await _dbDeleteWhere('kb_ai_conversations', 'item_id', id);
+    // 清理 FTS 索引（快路径：条目上的 token 列表）
+    try { await KBIndex.removeFromIndex(id, item?._tokens || null); } catch (e) { /* non-critical */ }
   },
 
   async toggleFavorite(id) {
@@ -315,13 +366,26 @@ const KBItem = {
   },
 
   async getStats() {
-    const [total, favorites, unparsed] = await Promise.all([
-      _dbCount('kb_items'),
-      // count favorites via query (simplified: count all and filter)
-      _dbGetAll('kb_items', 10000).then(items => items.filter(i => i.is_favorite).length),
-      _dbGetAll('kb_items', 10000).then(items => items.filter(i => i.parse_status === 'idle').length),
-    ]);
-    return { total, favorites, unparsed };
+    const total = await _dbCount('kb_items');
+    // 单次游标统计（替代两次全表拉取），支持超 1 万条数据
+    const sub = await new Promise((resolve, reject) => {
+      openKBDB().then(db => {
+        try {
+          const store = db.transaction('kb_items', 'readonly').objectStore('kb_items');
+          let favorites = 0, unparsed = 0;
+          const req = store.openCursor();
+          req.onsuccess = (ev) => {
+            const c = ev.target.result;
+            if (!c) { db.close(); resolve({ favorites, unparsed }); return; }
+            if (c.value.is_favorite) favorites++;
+            if (c.value.parse_status === 'idle') unparsed++;
+            c.continue();
+          };
+          req.onerror = () => { db.close(); reject(req.error); };
+        } catch (e) { db.close(); reject(e); }
+      }).catch(reject);
+    });
+    return { total, favorites: sub.favorites, unparsed: sub.unparsed };
   }
 };
 
@@ -353,7 +417,7 @@ const KBBlock = {
     });
 
     // 提取文本段落
-    const paragraphs = (content || '').split(/\n\n+/).filter(p => p.trim().length > 20);
+    const paragraphs = (content || '').split(/\n\n+/).filter(p => p.trim().length > 8);
     paragraphs.slice(0, 20).forEach(para => {
       blocks.push({
         item_id: itemId,
@@ -401,15 +465,15 @@ const KBBlock = {
 // ============================================================
 const KBIndex = {
   /**
-   * 简易中文分词 + trigram 索引
+   * 简易中文分词 + trigram 索引（Unicode 属性转义覆盖全部汉字，含扩展区）
    */
   _tokenize(text) {
     if (!text) return [];
     const tokens = new Set();
-    const cleaned = text.toLowerCase().replace(/[^\u4e00-\u9fa5a-zA-Z0-9]/g, ' ').replace(/\s+/g, ' ').trim();
+    const cleaned = text.toLowerCase().replace(/[^\p{Script=Han}a-zA-Z0-9]/gu, ' ').replace(/\s+/g, ' ').trim();
     
     // 中文：逐字 bigram（模拟分词）
-    const cnChars = cleaned.match(/[\u4e00-\u9fa5]+/g);
+    const cnChars = cleaned.match(/\p{Script=Han}+/gu);
     if (cnChars) {
       cnChars.forEach(word => {
         if (word.length >= 2) {
@@ -440,37 +504,63 @@ const KBIndex = {
   },
 
   /**
-   * 更新条目的搜索索引
+   * 更新条目的搜索索引（批量读写 + 单事务 + 中止可恢复）
+   * 可选传入旧 token 列表做差异更新（KBItem.update 路径）
+   * 返回本次索引的 token 列表（持久化到条目上，供删除/更新时反查）
    */
-  async updateIndex(itemId, title, content, url) {
+  async updateIndex(itemId, title, content, url, oldTokens = null) {
     const fullText = [title || '', content || '', url || ''].join(' ');
     const tokens = KBIndex._tokenize(fullText);
+    const tokenSet = new Set(tokens);
+    const previous = oldTokens || [];
+    // 需移除的旧 token（不再出现的）与需写入的 token
+    const toRemove = previous.filter(t => !tokenSet.has(t));
+    const toUpsert = tokens;
     
     const db = await openKBDB();
     try {
       const tx = db.transaction('kb_search_index', 'readwrite');
       const store = tx.objectStore('kb_search_index');
-      
-      for (const token of tokens) {
-        const existing = await new Promise(resolve => {
-          const req = store.get(token);
-          req.onsuccess = () => resolve(req.result);
-          req.onerror = () => resolve(null);
+
+      // 1. 批量读取现有 posting（一次 getAll，替代逐 token 串行 get）
+      const keys = [...new Set([...toUpsert, ...toRemove])];
+      const existingMap = new Map();
+      if (keys.length > 0) {
+        const entries = await new Promise((resolve, reject) => {
+          const req = store.getAll(keys);
+          req.onsuccess = () => resolve(req.result || []);
+          req.onerror = () => reject(req.error);
         });
-        
-        if (existing) {
-          const ids = existing.item_ids || [];
-          if (!ids.includes(itemId)) {
-            ids.push(itemId);
-            store.put({ term: token, item_ids: ids.slice(0, 10000) });
-          }
-        } else {
-          store.put({ term: token, item_ids: [itemId] });
+        entries.forEach(e => { if (e && e.term) existingMap.set(e.term, e); });
+      }
+
+      // 2. 写入新 token 的 posting
+      for (const token of toUpsert) {
+        const existing = existingMap.get(token);
+        const ids = existing ? [...(existing.item_ids || [])] : [];
+        if (!ids.includes(itemId)) ids.push(itemId);
+        if (!existing || !(existing.item_ids || []).includes(itemId) || ids.length !== (existing.item_ids || []).length) {
+          store.put({ term: token, item_ids: ids.slice(0, 10000) });
         }
       }
-      
-      await new Promise((resolve) => { tx.oncomplete = () => resolve(); });
+
+      // 3. 清理已失效的旧 token posting
+      for (const token of toRemove) {
+        const existing = existingMap.get(token);
+        if (existing) {
+          const ids = (existing.item_ids || []).filter(id => id !== itemId);
+          if (ids.length > 0) store.put({ term: token, item_ids: ids });
+          else store.delete(token);
+        }
+      }
+
+      await new Promise((resolve, reject) => {
+        tx.oncomplete = () => resolve();
+        tx.onabort = () => reject(tx.error || new Error('索引事务中止'));
+        tx.onerror = () => reject(tx.error || new Error('索引事务错误'));
+      });
       db.close();
+      return tokens;
     } catch(e) {
       db.close();
       throw e;
@@ -534,11 +624,38 @@ const KBIndex = {
 
   /**
    * 删除条目的索引
+   * @param {number} itemId
+   * @param {string[]} [tokens] 条目上持久化的 token 列表（O(词数) 快路径）；缺失时全索引扫描兜底
    */
-  async removeFromIndex(itemId) {
+  async removeFromIndex(itemId, tokens = null) {
     const db = await openKBDB();
     try {
       const store = db.transaction('kb_search_index', 'readwrite').objectStore('kb_search_index');
+
+      if (Array.isArray(tokens) && tokens.length > 0) {
+        // 快路径：批量读对应 posting 后事务内回写
+        const entries = await new Promise((resolve, reject) => {
+          const req = store.getAll(tokens);
+          req.onsuccess = () => resolve(req.result || []);
+          req.onerror = () => reject(req.error);
+        });
+        for (const entry of entries) {
+          if (!entry || !Array.isArray(entry.item_ids)) continue;
+          const newIds = entry.item_ids.filter(id => id !== itemId);
+          if (newIds.length > 0) store.put({ term: entry.term, item_ids: newIds });
+          else store.delete(entry.term);
+        }
+        await new Promise((resolve, reject) => {
+          const tx = store.transaction;
+          tx.oncomplete = () => resolve();
+          tx.onabort = () => reject(tx.error || new Error('索引事务中止'));
+          tx.onerror = () => reject(tx.error || new Error('索引事务错误'));
+        });
+        db.close();
+        return;
+      }
+
+      // 兜底：全索引扫描
       const allTerms = await new Promise(resolve => {
         const results = [];
         store.openCursor().onsuccess = (ev) => {
@@ -548,7 +665,6 @@ const KBIndex = {
           cursor.continue();
         };
       });
-      
       for (const entry of allTerms) {
         if (entry.item_ids && entry.item_ids.includes(itemId)) {
           const newIds = entry.item_ids.filter(id => id !== itemId);
@@ -559,12 +675,55 @@ const KBIndex = {
           }
         }
       }
-      
-      await new Promise(resolve => { db.transaction; setTimeout(resolve, 100); });
+      await new Promise((resolve, reject) => {
+        const tx = store.transaction;
+        tx.oncomplete = () => resolve();
+        tx.onabort = () => reject(tx.error || new Error('索引事务中止'));
+        tx.onerror = () => reject(tx.error || new Error('索引事务错误'));
+      });
       db.close();
     } catch(e) {
       db.close();
     }
+  },
+
+  /**
+   * 模糊搜索建议（"您是不是要找…"）
+   * 用 WASM 编辑距离（WasmKernels.levenshtein，字节级）对最近条目标题做近邻匹配；
+   * WASM 不可用时自动降级 JS 实现。
+   */
+  async suggest(query, limit = 3) {
+    if (!query || query.trim().length < 2) return [];
+    const q = query.trim().toLowerCase();
+    const qBytes = new TextEncoder().encode(q).length;
+    const items = await KBItem.getAll(60);
+    const lev = (typeof WasmKernels !== 'undefined' && WasmKernels.levenshtein)
+      ? WasmKernels.levenshtein
+      : ((a, b) => {
+          const A = [...a], B = [...b];
+          let prev = new Array(B.length + 1), cur = new Array(B.length + 1);
+          for (let j = 0; j <= B.length; j++) prev[j] = j;
+          for (let i = 1; i <= A.length; i++) {
+            cur[0] = i;
+            for (let j = 1; j <= B.length; j++) {
+              const cost = A[i - 1] === B[j - 1] ? 0 : 1;
+              cur[j] = Math.min(cur[j - 1] + 1, prev[j] + 1, prev[j - 1] + cost);
+            }
+            const t = prev; prev = cur; cur = t;
+          }
+          return prev[B.length];
+        });
+    // 字节级距离阈值：CJK 每字 3 字节，等价于允许约 2 个汉字 / 6 个 ASCII 字符的差异
+    const maxDist = Math.max(6, Math.round(qBytes * 0.5));
+    const scored = [];
+    for (const item of items) {
+      const title = String(item.title || '').trim().toLowerCase();
+      if (!title) continue;
+      const dist = lev(q, title);
+      if (dist <= maxDist) scored.push({ id: item.id, title: item.title, distance: dist });
+    }
+    scored.sort((a, b) => a.distance - b.distance);
+    return scored.slice(0, limit);
   }
 };
 
@@ -657,10 +816,35 @@ const KBTag = {
       color: color || KBTag._randomColor(),
       created_at: Date.now(),
     };
-    return await _dbAdd('kb_tags', record);
+    try {
+      return await _dbAdd('kb_tags', record);
+    } catch (e) {
+      // 并发创建同名标签会触发 unique 约束错误 → 回读已有 id
+      if (e && (e.name === 'ConstraintError' || String(e.message || '').includes('Constraint'))) {
+        const again = await KBTag.getByName(name);
+        if (again) return again.id;
+      }
+      throw e;
+    }
   },
 
   async getByName(name) {
+    // 走 name 唯一索引直查（替代全表扫描）
+    const id = await new Promise((resolve, reject) => {
+      openKBDB().then(db => {
+        try {
+          const store = db.transaction('kb_tags', 'readonly').objectStore('kb_tags');
+          if (store.indexNames.contains('name')) {
+            const req = store.index('name').get(name);
+            req.onsuccess = () => { db.close(); resolve(req.result ? req.result.id : null); };
+            req.onerror = () => { db.close(); reject(req.error); };
+          } else {
+            db.close(); resolve(null);
+          }
+        } catch (e) { db.close(); reject(e); }
+      }).catch(reject);
+    });
+    if (id !== null) return { id };
     const all = await _dbGetAll('kb_tags', 500);
     return all.find(t => t.name === name) || null;
   },
@@ -673,12 +857,12 @@ const KBTag = {
     try {
       await _dbAdd('kb_item_tag_links', { item_id: itemId, tag_id: tagId, source, created_at: Date.now() });
       
-      // 更新条目的 tag_ids
-      const item = await KBItem.get(itemId);
-      if (item) {
+      // 更新条目的 tag_ids（单事务 RMW，避免并发打标互相覆盖）
+      await _dbRMW('kb_items', itemId, item => {
+        if (!item) return null;
         const tagIds = [...(item.tag_ids || []), tagId];
-        await KBItem.update(itemId, { tag_ids: [...new Set(tagIds)] });
-      }
+        return { ...item, tag_ids: [...new Set(tagIds)] };
+      });
     } catch(e) {
       // 忽略重复关联错误
     }
@@ -686,10 +870,10 @@ const KBTag = {
 
   async unlinkItem(itemId, tagId) {
     await _dbDelete('kb_item_tag_links', [itemId, tagId]);
-    const item = await KBItem.get(itemId);
-    if (item) {
-      await KBItem.update(itemId, { tag_ids: (item.tag_ids || []).filter(id => id !== tagId) });
-    }
+    await _dbRMW('kb_items', itemId, item => {
+      if (!item) return null;
+      return { ...item, tag_ids: (item.tag_ids || []).filter(id => id !== tagId) };
+    });
   },
 
   async getItemTags(itemId) {
@@ -717,11 +901,8 @@ const KBTag = {
   },
 
   async delete(id) {
-    // 删除关联
-    const allLinks = await _dbGetAll('kb_item_tag_links', 5000, 0, 'tag_id');
-    for (const link of allLinks.filter(l => l.tag_id === id)) {
-      await _dbDelete('kb_item_tag_links', [link.item_id, link.tag_id]);
-    }
+    // 删除关联（索引游标删除，不受 5000 条截断影响）
+    await _dbDeleteWhere('kb_item_tag_links', 'tag_id', id);
     await _dbDelete('kb_tags', id);
   },
 
@@ -776,11 +957,11 @@ const KBAiConversation = {
 
   async getAll(limit = 50) {
     const convs = await _dbGetAll('kb_ai_conversations', limit, 0, 'last_message_at', 'prev');
-    return convs.map(c => ({
-      ...c,
-      messages: JSON.parse(c.messages_json || '[]'),
-      message_count: JSON.parse(c.messages_json || '[]').length,
-    }));
+    return convs.map(c => {
+      let msgs = [];
+      try { msgs = JSON.parse(c.messages_json || '[]'); } catch (e) { msgs = []; } // 坏数据只影响该条
+      return { ...c, messages: msgs, message_count: msgs.length };
+    });
   },
 
   async getByItem(itemId) {

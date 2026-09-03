@@ -131,7 +131,7 @@ const ActionExecutor = {
 function executeActionsInPage(actions) {
   return actions.map(a => {
     if (!ActionExecutor[a.action]) return { action: a.action, selector: a.selector, success: false, error: '未知操作' };
-    try { return { action: a.action, selector: a.selector, ...ActionExecutor[a.action](a.selector) }; }
+    try { return { action: a.action, selector: a.selector, ...ActionExecutor[a.action](a.selector, a.params) }; }
     catch (e) { return { action: a.action, selector: a.selector, success: false, error: e.message }; }
   });
 }
@@ -238,7 +238,7 @@ const CHAT_STYLES = `
   .message-area::-webkit-scrollbar-thumb { background: var(--text-faint); border-radius: 20px; }
   .message-area::-webkit-scrollbar-thumb:hover { background: var(--text-tertiary); }
 
-  /* —— 空状态：引导式、智能感 —— */
+  /* —— 空状态 —— */
   .empty-state {
     flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center;
     padding: 20px 16px; gap: 6px; text-align: center;
@@ -508,19 +508,19 @@ function createChatPanel() {
           <svg viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="8.5" stroke="#fff" stroke-width="1.6" stroke-linecap="round" stroke-dasharray="38 12" transform="rotate(-90 12 12)"/><path d="M6 12 A 6 6 0 0 1 18 12" stroke="#fff" stroke-width="1.5" stroke-linecap="round"/><path d="M6 12 A 6 6 0 0 0 18 12" stroke="#fff" stroke-width="1.5" stroke-linecap="round" opacity="0.5"/><circle cx="12" cy="12" r="1.4" fill="#fff"/></svg>
         </div>
         <div class="title">无极已就绪</div>
-        <div class="subtitle">基于知识库与当前页面上下文的 AI 助手</div>
+        <div class="subtitle">有什么想问的？</div>
         <div class="suggestions" id="suggestions">
-          <button class="suggestion" data-prompt="请分析此页面的核心内容，提炼 3-5 个关键洞察。">
+          <button class="suggestion" data-prompt="请分析这个页面，总结 3-5 个主要要点。">
             <span class="s-ico">${ICO.bulb}</span>
-            <span class="s-txt"><b>分析此页面</b><span>提炼核心内容与洞察</span></span>
+            <span class="s-txt"><b>分析此页面</b><span>总结主要内容</span></span>
           </button>
           <button class="suggestion" data-prompt="总结这个页面的要点，用简洁的列表呈现。">
             <span class="s-ico">${ICO.doc}</span>
-            <span class="s-txt"><b>总结要点</b><span>快速获取页面精华</span></span>
+            <span class="s-txt"><b>总结要点</b><span>快速了解页面说了什么</span></span>
           </button>
           <button class="suggestion" data-prompt="基于知识库中相关内容，回答我的问题。">
             <span class="s-ico">${ICO.book}</span>
-            <span class="s-txt"><b>查询知识库</b><span>检索已保存的网页与笔记</span></span>
+            <span class="s-txt"><b>查询知识库</b><span>搜索已保存的网页和笔记</span></span>
           </button>
         </div>
       </div>
@@ -586,7 +586,7 @@ function bindPanelEvents(shadow) {
   // 分析（已移至输入栏，保留顶栏无 home 按钮）
   $('#btn-analyze').addEventListener('click', () => {
     if (isProcessing) return;
-    const preset = '请分析此页面的核心内容，按以下格式输出：\n\n📋 数据总览：列出页面中发现的表格/列表/结构化数据\n📊 核心发现：提炼 3-5 个关键洞察\n💡 分析结论：用 1-2 句话总结最重要的发现\n\n要求：重点数据用**加粗**标记。';
+    const preset = '分析这个页面，总结主要内容。';
     $('#user-input').value = preset;
     handleSend(preset);
   });
@@ -631,7 +631,8 @@ function bindPanelEvents(shadow) {
   // 发送
   $('#send-btn').addEventListener('click', () => handleSend());
   $('#user-input').addEventListener('keydown', (e) => {
-    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSend(); }
+    // 中文输入法组词中的 Enter 不发送（isComposing / keyCode 229 均为输入法态）
+    if (e.key === 'Enter' && !e.shiftKey && !e.isComposing && e.keyCode !== 229) { e.preventDefault(); handleSend(); }
   });
   $('#user-input').addEventListener('input', () => {
     const ta = $('#user-input');
@@ -817,7 +818,6 @@ async function handleSend(messageOverride) {
     // AI 气泡占位
     streamingBubble = createAIBubble();
     area.appendChild(streamingBubble);
-    streamingContentEl = streamingBubble.querySelector('.body');
     streamingContent = '';
 
     if (input) { input.value = ''; input.style.height = 'auto'; }
@@ -895,9 +895,11 @@ function _renderStreamPartial(text, bubble) {
 
 function _stopStreamAnimation(finalBubble) {
   if (_streamRAF) { cancelAnimationFrame(_streamRAF); _streamRAF = null; }
-  if (_streamCursor && _streamCursor.isConnected) {
-    _streamCursor.classList.add('done');
-    setTimeout(() => { if (_streamCursor.isConnected) _streamCursor.remove(); }, 500);
+  // 捕获局部引用：闭包执行时 _streamCursor 已被置 null，直接读会抛 TypeError
+  const cursor = _streamCursor;
+  if (cursor && cursor.isConnected) {
+    cursor.classList.add('done');
+    setTimeout(() => { if (cursor.isConnected) cursor.remove(); }, 500);
   }
   _streamBubble = null;
   _streamBuffer = '';
@@ -910,14 +912,15 @@ function _stopStreamAnimation(finalBubble) {
  * 完成后会用完整 renderMarkdown 重新渲染
  */
 function renderStreamMarkdown(text) {
-  let h = text;
-  h = h.replace(/```(\w*)\n([\s\S]*?)```/g, (_, lang, code) => `<pre><code>${esc(code.trim())}</code></pre>`);
+  // 先整体转义再套 Markdown，杜绝 LLM 输出中的 HTML 注入
+  let h = escHtml(text);
+  h = h.replace(/```(\w*)\n([\s\S]*?)```/g, (_, lang, code) => `<pre><code>${code}</code></pre>`);
   h = h.replace(/`([^`]+)`/g, '<code>$1</code>');
   h = h.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
   h = h.replace(/^### (.+)$/gm, '<h4>$1</h4>');
   h = h.replace(/^## (.+)$/gm, '<h3>$1</h3>');
   h = h.replace(/^- (.+)$/gm, '• $1');
-  h = h.replace(/^> (.+)$/gm, '<blockquote>$1</blockquote>');
+  h = h.replace(/^&gt; (.+)$/gm, '<blockquote>$1</blockquote>');
   h = h.replace(/\n/g, '<br>');
   return h;
 }
@@ -935,7 +938,7 @@ function handleStreamDelta(delta) {
       bubble.style.display = '';
       requestAnimationFrame(() => { bubble.classList.remove('stream-entering'); bubble.classList.add('stream-active'); });
     }
-    setTimeout(() => { if (streamingBubble._typingDots) streamingBubble._typingDots.style.display = 'none'; }, 350);
+    setTimeout(() => { if (streamingBubble && streamingBubble._typingDots) streamingBubble._typingDots.style.display = 'none'; }, 350);
     // 启动动画引擎
     _startStreamAnimation(bubble || streamingBubble.querySelector('.msg-bubble'));
   }
@@ -1079,12 +1082,17 @@ async function handleVideoSummary() {
       b.remove();
       streamingBubble = createAIBubble();
       area.appendChild(streamingBubble);
-    streamingContentEl = streamingBubble._contentBubble || streamingBubble.querySelector('.msg-bubble');
       streamingContent = '';
       isProcessing = true;
+      // 视频摘要经 tabs.sendMessage 流式下发，不走 AI_CHAT 历史链路，这里补记保持对话连贯
+      conversationHistory.push({ role: 'user', content: '请总结当前视频内容' });
       const sendBtn = $('#send-btn'); if (sendBtn) sendBtn.disabled = true;
+      updateStatus('生成中...', false, true);
+      return;
     } else if (r?.success) {
       b.querySelector('.msg-bubble').textContent = '视频摘要生成完成';
+      updateStatus('就绪');
+      return;
     } else {
       b.querySelector('.msg-bubble').textContent = '视频摘要失败: ' + (r?.error || '未知错误');
     }
@@ -1180,7 +1188,7 @@ function renderKBList(items) {
     let tagBadges = '';
     if (item.tags && item.tags.length > 0) {
       tagBadges = '<div style="display:flex;gap:4px;flex-wrap:wrap;margin-top:4px;">' +
-        item.tags.map(t => `<span style="font-size:9px;padding:1px 6px;border-radius:8px;background:${t.color || '#e5e7eb'};color:#fff;font-weight:500;">${esc(t.name)}</span>`).join('') +
+        item.tags.map(t => `<span style="font-size:9px;padding:1px 6px;border-radius:8px;background:${/^#[0-9a-fA-F]{3,8}$/.test(t.color || '') ? t.color : '#e5e7eb'};color:#fff;font-weight:500;">${esc(t.name)}</span>`).join('') +
         '</div>';
     }
     const favIcon = item.is_favorite ? ' ⭐' : '';
@@ -1218,26 +1226,37 @@ function esc(s) { const d = document.createElement('div'); d.textContent = s; re
 // ============================================================
 // Markdown 渲染
 // ============================================================
+function escHtml(t) {
+  return String(t).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}
+
+// Markdown 链接只允许 http/https，杜绝 javascript: 等协议注入
+function safeHref(href) {
+  const h = String(href || '').trim();
+  return /^https?:\/\//i.test(h) ? escHtml(h) : '#';
+}
+
+// ============================================================
+// Markdown 渲染（安全版：先整体 HTML 转义，再套 Markdown 语法）
+// ============================================================
 function renderMarkdown(text) {
-  let h = text;
-  h = h.replace(/```(\w*)\n([\s\S]*?)```/g, (_, lang, code) => `<pre><code>${escHtml(code.trim())}</code></pre>`);
+  let h = escHtml(text);
+  h = h.replace(/```(\w*)\n([\s\S]*?)```/g, (_, lang, code) => `<pre><code>${code}</code></pre>`);
   h = h.replace(/`([^`]+)`/g, '<code>$1</code>');
   h = h.replace(/^### (.+)$/gm, '<h4>$1</h4>');
   h = h.replace(/^## (.+)$/gm, '<h3>$1</h3>');
   h = h.replace(/^# (.+)$/gm, '<h3>$1</h3>');
   h = h.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
   h = h.replace(/\*(.+?)\*/g, '<em>$1</em>');
-  h = h.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank" style="color:var(--accent)">$1</a>');
+  h = h.replace(/\[([^\]]+)\]\(([^)]+)\)/g, (_, label, href) => `<a href="${safeHref(href)}" target="_blank" style="color:var(--accent)">${label}</a>`);
   h = h.replace(/^- (.+)$/gm, '<li>$1</li>');
   h = h.replace(/((?:<li>.*<\/li>\n?)+)/g, '<ul>$1</ul>');
-  h = h.replace(/^> (.+)$/gm, '<blockquote>$1</blockquote>');
+  h = h.replace(/^&gt; (.+)$/gm, '<blockquote>$1</blockquote>');
   h = h.replace(/^---$/gm, '<hr>');
   h = h.replace(/\n\n/g, '<br><br>');
   h = h.replace(/\n/g, '<br>');
   return h;
 }
-
-function escHtml(t) { return t.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'); }
 
 // ============================================================
 // 对话持久化
@@ -1263,6 +1282,9 @@ async function loadConversation() {
             const bubble = b.querySelector('.msg-bubble');
             if (bubble) { bubble.innerHTML = renderMarkdown(msg.content); bubble.classList.add('md'); }
             area.appendChild(b);
+          } else {
+            // 压缩后的历史摘要等 system 消息也要渲染，否则面板打开后是空白
+            area.appendChild(createBubble('system', msg.content));
           }
         });
         scrollToBottom();
@@ -1313,7 +1335,7 @@ function createPopup() {
   const header = document.createElement('div');
   header.style.cssText = 'display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;font-weight:600;font-size:12px;color:#6366f1;text-transform:uppercase;letter-spacing:0.5px;';
   const titleSpan = document.createElement('span');
-  titleSpan.id = 'ai-popup-title'; titleSpan.textContent = 'AI 助手';
+  titleSpan.id = 'ai-popup-title'; titleSpan.textContent = '无极';
   header.appendChild(titleSpan);
 
   const closeBtn = document.createElement('button');
@@ -1430,7 +1452,8 @@ function extractYouTubeSubtitle(title) {
 function extractGenericVideoInfo(title) {
   try {
     const videoEl = document.querySelector('video');
-    const dur = videoEl ? Math.round(videoEl.duration || 0) : 0;
+    const durRaw = videoEl ? videoEl.duration : 0;
+    const dur = Number.isFinite(durRaw) ? Math.round(durRaw) : 0;
     const meta = document.querySelector('meta[name="description"], meta[property="og:description"]');
     const desc = meta ? meta.content : '';
     return { platform: 'other', title, subtitles: [], fullText: (desc ? '描述：' + desc : '') + (dur ? `\n视频时长：${Math.floor(dur/60)}分${dur%60}秒` : ''), needFetch: false };
@@ -1442,16 +1465,18 @@ function extractGenericVideoInfo(title) {
 // ============================================================
 function readDOMStructure(selector = 'body', maxDepth = 4, maxChildren = 8, waitMs = 0) {
   const el = document.querySelector(selector);
-  if (!el) {
-    // 支持等待：用 MutationObserver 监听直到目标元素出现
-    if (waitMs > 0) {
-      try {
-        return waitForElement(selector, waitMs, maxDepth, maxChildren);
-      } catch (e) { return { error: '等待超时: ' + selector + ' (' + e.message + ')' }; }
-    }
-    return { error: '未找到元素: ' + selector };
+  if (el) return buildTreeResult(el, selector, maxDepth, maxChildren);
+  // 支持等待：轮询直到目标元素出现（懒加载/动态渲染场景）
+  if (waitMs > 0) {
+    return waitForElement(selector, waitMs).then(found => {
+      return found ? buildTreeResult(found, selector, maxDepth, maxChildren)
+                   : { error: '等待超时: ' + selector + ' (' + waitMs + 'ms)' };
+    });
   }
+  return { error: '未找到元素: ' + selector };
+}
 
+function buildTreeResult(el, selector, maxDepth, maxChildren) {
   function buildTree(node, depth) {
     if (depth > maxDepth) return { tag: node.nodeName, _truncated: true };
 
@@ -1499,19 +1524,19 @@ function readDOMStructure(selector = 'body', maxDepth = 4, maxChildren = 8, wait
 }
 
 /**
- * MutationObserver 等待目标元素出现（同步阻塞式用于 readDOMStructure）
+ * 异步轮询等待目标元素出现（非阻塞，供 readDOMStructure 使用）
  */
-function waitForElement(selector, timeoutMs, maxDepth, maxChildren) {
-  const start = Date.now();
-  const el = document.querySelector(selector);
-  if (el) return buildTreeSync(el, maxDepth, maxChildren);
-
-  // 快速轮询方式（简单可靠，无需处理异步 Promise）
-  // 每 100ms 检查一次，最多等待 timeoutMs
-  const checkInterval = 100;
-  const deadline = start + timeoutMs;
-  // 不能用同步阻塞（会卡死页面），改为在调用方用 Promise 包装
-  throw new Error('元素尚未加载，请设置 wait:' + timeoutMs + 'ms 重新调用，或使用 watch_dom 工具监听');
+function waitForElement(selector, timeoutMs) {
+  return new Promise((resolve) => {
+    const deadline = Date.now() + timeoutMs;
+    const check = () => {
+      const el = document.querySelector(selector);
+      if (el) { resolve(el); return; }
+      if (Date.now() >= deadline) { resolve(null); return; }
+      setTimeout(check, 100);
+    };
+    check();
+  });
 }
 
 function buildTreeSync(el, maxDepth, maxChildren) {
@@ -1597,6 +1622,7 @@ function watchDOM(selector, reportFn, options = {}) {
   let timer = null;
 
   const observer = new MutationObserver((mutations) => {
+    if (!reportFn) return; // 无上报回调时只监听不收集，防止 changes 无限增长
     mutations.forEach(m => {
       m.addedNodes.forEach(node => {
         if (node.nodeType === 1) {
@@ -1606,6 +1632,8 @@ function watchDOM(selector, reportFn, options = {}) {
         }
       });
     });
+    // 容量保护：最多保留最近 200 条变化
+    if (changes.length > 200) changes.splice(0, changes.length - 200);
     // 防抖上报
     clearTimeout(timer);
     timer = setTimeout(() => {
@@ -1662,9 +1690,12 @@ function deepWatchDOM(selector, debounceMs = 500, waitParentMs = 10000) {
 // 选中文字 → 显示轮盘
 document.addEventListener('mouseup', e => {
   setTimeout(() => {
+    // 点击轮盘按钮/弹窗本身（mousedown 已 preventDefault 保留选区）时不再重复弹出
+    if (toolbarEl?.contains(e.target) || popupEl?.contains(e.target)) return;
+    // 聊天面板（Shadow DOM）内部的选区不触发页面轮盘
+    try { if (e.target.getRootNode() !== document) return; } catch (_) {}
     const sel = window.getSelection();
     if (!sel || sel.isCollapsed) {
-      if (toolbarEl?.contains(e.target) || popupEl?.contains(e.target)) return;
       hideToolbar(); hidePopup(); return;
     }
     const text = sel.toString().trim();
@@ -1695,7 +1726,13 @@ document.addEventListener('keydown', e => {
 });
 
 window.addEventListener('resize', () => { hideToolbar(); hidePopup(); });
-window.addEventListener('scroll', () => { hideToolbar(); hidePopup(); }, { passive: true });
+// rAF 节流：高频 scroll 下每个事件写样式造成无谓回流
+let _scrollPending = false;
+window.addEventListener('scroll', () => {
+  if (_scrollPending) return;
+  _scrollPending = true;
+  requestAnimationFrame(() => { _scrollPending = false; hideToolbar(); hidePopup(); });
+}, { passive: true });
 
 // ============================================================
 // 第七部分：消息监听（来自 Service Worker）
@@ -1739,14 +1776,20 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return true;
   }
 
-  // DOM 结构读取（增强：支持 wait 参数等待懒加载）
+  // DOM 结构读取（支持 wait 参数等待懒加载，异步轮询不阻塞页面）
   if (message.type === 'GET_DOM_STRUCTURE') {
     try {
       const sel = message.selector || 'body';
       const depth = message.maxDepth || 3;
       const maxChildren = message.maxChildren || 6;
       const waitMs = message.wait || 0;
-      sendResponse({ success: true, data: readDOMStructure(sel, depth, maxChildren, waitMs) });
+      const result = readDOMStructure(sel, depth, maxChildren, waitMs);
+      if (result && typeof result.then === 'function') {
+        result.then(r => sendResponse({ success: true, data: r }))
+              .catch(e => sendResponse({ success: false, error: e.message }));
+      } else {
+        sendResponse({ success: true, data: result });
+      }
     } catch (e) { sendResponse({ success: false, error: e.message }); }
     return true;
   }
@@ -1920,16 +1963,20 @@ function extractPageImages() {
     images.push({ src, alt: img.alt || '', width: w, height: h });
   });
 
-  // 收集背景图片
-  document.querySelectorAll('*').forEach(el => {
+  // 收集背景图片（跳过非视觉标签 + 满 30 张提前退出，避免全树 getComputedStyle）
+  const SKIP_BG_TAGS = new Set(['SCRIPT', 'STYLE', 'LINK', 'META', 'HEAD', 'TITLE', 'NOSCRIPT', 'TEMPLATE']);
+  const allEls = document.querySelectorAll('*');
+  for (const el of allEls) {
+    if (images.length >= 30) break;
+    if (SKIP_BG_TAGS.has(el.tagName)) continue;
     const bg = getComputedStyle(el).backgroundImage;
-    if (!bg || bg === 'none') return;
+    if (!bg || bg === 'none') continue;
     const match = bg.match(/url\(["']?(.*?)["']?\)/);
     if (match && match[1] && !seen.has(match[1])) {
       seen.add(match[1]);
       images.push({ src: match[1], alt: '', width: 0, height: 0 });
     }
-  });
+  }
 
   // 限制最多 30 张
   return images.slice(0, 30);
@@ -2066,7 +2113,6 @@ async function selectImageForAnalysis(imageSrc, altText) {
   // AI 气泡占位
   streamingBubble = createAIBubble();
   area.appendChild(streamingBubble);
-  streamingContentEl = streamingBubble.querySelector('.body');
   streamingContent = '';
   isProcessing = true;
   const sendBtn = $('#send-btn');
@@ -2172,16 +2218,16 @@ function showSponsorModal(imgUrl) {
   document.body.appendChild(overlay);
 
   overlay.addEventListener('click', (e) => {
-    if (e.target === overlay || e.target.id === 'wuji-sponsor-close') {
-      overlay.remove();
-    }
+    if (e.target === overlay || e.target.id === 'wuji-sponsor-close') closeSponsor();
   });
 
-  // ESC关闭
-  const onKey = (e) => {
-    if (e.key === 'Escape') { overlay.remove(); document.removeEventListener('keydown', onKey); }
-  };
+  // ESC 关闭（统一清理 keydown 监听，所有关闭路径都走 closeSponsor）
+  const onKey = (e) => { if (e.key === 'Escape') closeSponsor(); };
   document.addEventListener('keydown', onKey);
+  function closeSponsor() {
+    document.removeEventListener('keydown', onKey);
+    overlay.remove();
+  }
 }
 
 // ============================================================
@@ -2189,7 +2235,12 @@ function showSponsorModal(imgUrl) {
 // ============================================================
 function init() {
   console.log('[无极] Content Script 已加载');
-  setTimeout(() => sendPageContentToBackground(), 1500);
+  // 页面全文自动存档默认关闭（隐私 + 存储膨胀），需在设置中开启"自动记忆访问页面"
+  try {
+    chrome.storage.sync.get('privacyConfig', r => {
+      if (r.privacyConfig?.autoSavePages) setTimeout(sendPageContentToBackground, 1500);
+    });
+  } catch (e) { /* ignore */ }
   createToolbar(); // 预创建轮盘 DOM
 }
 

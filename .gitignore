@@ -18,3 +18,6 @@ npm-debug.log*
 
 # 依赖
 node_modules/
+
+# Video Agent Kit 工作目录
+.video_agent/

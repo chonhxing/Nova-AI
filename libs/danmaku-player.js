@@ -24,6 +24,8 @@
     fontSize: 22,
     speed: 1.0,
     displayArea: 'full',   // full | top3 | bottom3 | topHalf | bottomHalf
+    offset: 0,             // 时间轴偏移（秒），正=弹幕后移，用于对齐 YouTube 与 B站视频
+    leadTime: 0.3,         // 弹幕提前量（秒）
     showControls: true,
     // 渲染
     overlay: null,
@@ -35,7 +37,8 @@
     controls: null,
     videoEl: null,
     animationId: null,
-    initialized: false
+    initialized: false,
+    unloaded: false
   };
 
   const COLORS = [
@@ -238,16 +241,19 @@
   // 弹幕调度
   // ============================================================
   function spawnDanmaku(d) {
-    if (d.mode === MODE_SCROLL) return spawnScroll(d);
-    else if (d.mode === MODE_TOP) return spawnFixed(d, 'top');
-    else if (d.mode === MODE_BOTTOM) return spawnFixed(d, 'bottom');
-    return spawnScroll(d); // 默认滚动
+    const mode = d.mode;
+    // B站 mode 定义：1/2/3 滚动，4 底部固定，5 顶部固定，6 逆向滚动，7+ 高级/代码/BAS
+    if (mode === MODE_BOTTOM) return spawnFixed(d, 'bottom');
+    if (mode === MODE_TOP) return spawnFixed(d, 'top');
+    if (mode >= 7) return true; // 高级/代码/BAS 弹幕依赖坐标数据，跳过以免渲染错乱（视为已处理）
+    // 1/2/3 滚动 + 6 逆向滚动（简化为滚动）
+    return spawnScroll(d);
   }
 
   function spawnScroll(d) {
-    if (!state.overlay || state.overlay.clientWidth < 100) return;
+    if (!state.overlay || state.overlay.clientWidth < 100) return false; // 尚未就绪，稍后重试
     const item = state.pool.find(p => !p.inUse);
-    if (!item) return;
+    if (!item) return false; // 池满：本次不发射，下一帧重试（不丢弹幕）
     item.inUse = true;
     const el = item.el;
     const text = d.text.substring(0, 80);
@@ -274,12 +280,13 @@
     el._duration = duration;
     el._startTime = performance.now();
     el.style.transform = 'translateX(0px)';
+    return true;
   }
 
   function spawnFixed(d, pos) {
     const pool = pos === 'top' ? state.topPool : state.bottomPool;
     const item = pool.find(p => !p.inUse);
-    if (!item) return;
+    if (!item) return false; // 池满：下一帧重试
     item.inUse = true;
     const el = item.el;
     const videoRate = (state.videoEl && state.videoEl.playbackRate) || 1;
@@ -293,14 +300,18 @@
     el.style.transition = 'opacity 0.3s';
 
     if (item.timeout) clearTimeout(item.timeout);
+    if (item.fadeTimeout) clearTimeout(item.fadeTimeout);
     item.timeout = setTimeout(() => {
       el.style.opacity = '0';
-      setTimeout(() => {
+      // 内层淡出定时器也登记到 item 上，seek 清屏时一并取消，避免误杀新弹幕
+      item.fadeTimeout = setTimeout(() => {
         el.style.display = 'none';
         el.style.opacity = state.opacity;
         item.inUse = false;
+        item.fadeTimeout = null;
       }, 350 / videoRate);
     }, 4000 / videoRate);
+    return true;
   }
 
   // ============================================================
@@ -316,27 +327,23 @@
       state.videoEl = video;
       syncOverlayPosition();
     }
-    if (video.paused) return;
     const time = video.currentTime;
 
-    // 检查是否有弹幕需要发射
-    while (state.currentIdx < state.sorted.length && state.sorted[state.currentIdx].time <= time + 0.3) {
-      spawnDanmaku(state.sorted[state.currentIdx]);
-      state.currentIdx++;
-    }
-    // 如果快进回去了，重置索引
-    if (time < state.lastTime - 2) {
-      state.currentIdx = 0;
-      // 二分查找当前位置
-      let lo = 0, hi = state.sorted.length;
-      while (lo < hi) {
-        const mid = (lo + hi) >> 1;
-        if (state.sorted[mid].time < time) lo = mid + 1;
-        else hi = mid;
-      }
-      state.currentIdx = lo;
+    // 检测时间跳变（快进/快退/拖动进度条），用二分重新定位，避免逐条补发或漏发
+    if (Math.abs(time - state.lastTime) > 2) {
+      clearScreen();
+      state.currentIdx = lowerBound(time + state.leadTime); // 与发射判断一致，含提前量
     }
     state.lastTime = time;
+    if (video.paused) return;
+
+    // 发射到期弹幕（应用时间偏移 + 提前量）；池满时暂停推进，下一帧重试
+    const base = time + state.leadTime;
+    while (state.currentIdx < state.sorted.length &&
+           state.sorted[state.currentIdx].time + state.offset <= base) {
+      if (!spawnDanmaku(state.sorted[state.currentIdx])) break;
+      state.currentIdx++;
+    }
 
     // 更新滚动弹幕位置
     const now = performance.now();
@@ -354,6 +361,32 @@
     }
   }
 
+  // 二分查找：第一个 time + offset > t 的索引（即下一次应从该处发射）
+  function lowerBound(t) {
+    let lo = 0, hi = state.sorted.length;
+    while (lo < hi) {
+      const mid = (lo + hi) >> 1;
+      if (state.sorted[mid].time + state.offset <= t) lo = mid + 1;
+      else hi = mid;
+    }
+    return lo;
+  }
+
+  // 清空屏幕上残留弹幕（快进/快退时调用，避免旧弹幕继续飘）
+  function clearScreen() {
+    for (const p of state.pool) { p.el.style.display = 'none'; p.inUse = false; }
+    for (const p of state.topPool) {
+      p.el.style.display = 'none'; p.el.style.opacity = state.opacity; p.inUse = false;
+      if (p.timeout) clearTimeout(p.timeout);
+      if (p.fadeTimeout) clearTimeout(p.fadeTimeout); // 取消未完成的淡出，防误杀新弹幕
+    }
+    for (const p of state.bottomPool) {
+      p.el.style.display = 'none'; p.el.style.opacity = state.opacity; p.inUse = false;
+      if (p.timeout) clearTimeout(p.timeout);
+      if (p.fadeTimeout) clearTimeout(p.fadeTimeout);
+    }
+  }
+
   // ============================================================
   // 控制面板
   // ============================================================
@@ -367,6 +400,7 @@
           background:rgba(0,0,0,0.78);border-radius:10px;padding:10px 14px;
           display:none;flex-direction:column;gap:8px;font-size:12px;color:#ddd;
           min-width:160px;backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px);
+          pointer-events:auto;
           font-family:-apple-system,"PingFang SC","Microsoft YaHei",sans-serif;}
         .wdm-ctrl label{display:flex;align-items:center;gap:8px;justify-content:space-between;}
         .wdm-ctrl input[type=range]{width:80px;accent-color:#6366f1;height:4px;}
@@ -385,15 +419,23 @@
         <option value="bottom3">下1/3</option><option value="topHalf">上半</option>
         <option value="bottomHalf">下半</option>
       </select></label>
+      <label>时间偏移 <input type="range" id="wdm-offset" min="-30" max="30" value="0" step="0.5"></label>
+      <div class="wdm-info" style="text-align:left;color:#888;font-size:10px;">偏移：正数=弹幕后移（YouTube 比B站长时调正）</div>
       <button class="wdm-btn" id="wdm-toggle">关闭弹幕</button>
     `;
     ctrl.className = 'wdm-ctrl';
     state.overlay.appendChild(ctrl);
     state.controls = ctrl;
 
-    // 显示/隐藏控制面板
-    state.overlay.addEventListener('mouseenter', () => { ctrl.style.display = 'flex'; });
-    state.overlay.addEventListener('mouseleave', () => { ctrl.style.display = 'none'; });
+    // 显示/隐藏控制面板：overlay 自身 pointer-events:none，鼠标事件穿透，
+    // 因此挂到视频容器上触发，面板本身设 pointer-events:auto 才可交互
+    const hoverTarget = (state.overlay.parentElement && state.overlay.parentElement !== document.body)
+      ? state.overlay.parentElement
+      : (state.videoEl || state.overlay);
+    if (hoverTarget) {
+      hoverTarget.addEventListener('mouseenter', () => { ctrl.style.display = 'flex'; });
+      hoverTarget.addEventListener('mouseleave', () => { ctrl.style.display = 'none'; });
+    }
 
     // 绑定事件
     ctrl.querySelector('#wdm-opacity').addEventListener('input', function() {
@@ -414,6 +456,13 @@
       state.displayArea = this.value;
       saveSettings();
     });
+    ctrl.querySelector('#wdm-offset').addEventListener('input', function() {
+      state.offset = parseFloat(this.value);
+      // 调整偏移后，重新定位当前播放位置
+      const v = findVideo();
+      if (v && state.enabled) state.currentIdx = lowerBound(v.currentTime + state.leadTime);
+      saveSettings();
+    });
     ctrl.querySelector('#wdm-toggle').addEventListener('click', function() {
       toggleEnabled();
     });
@@ -425,6 +474,7 @@
     state.controls.querySelector('#wdm-size').value = state.fontSize;
     state.controls.querySelector('#wdm-speed').value = Math.round(state.speed * 10);
     state.controls.querySelector('#wdm-area').value = state.displayArea;
+    state.controls.querySelector('#wdm-offset').value = state.offset;
     state.controls.querySelector('#wdm-toggle').textContent = state.enabled ? '关闭弹幕' : '开启弹幕';
   }
 
@@ -512,7 +562,7 @@
     const popup = document.createElement('div');
     popup.id = 'wuji-dm-mini-settings';
     const setRows = sets.length > 0
-      ? sets.map(s => `<div class="dm-set-row"><span class="dm-set-name" title="${escHtml(s.title)}">${escHtml(s.title.substring(0,16))}</span><span class="dm-set-count">${s.count}条</span><button class="dm-load-btn" data-bvid="${s.bvid}">加载</button></div>`).join('')
+      ? sets.map(s => `<div class="dm-set-row"><span class="dm-set-name" title="${escHtml(s.title)}">${escHtml(s.title.substring(0,16))}</span><span class="dm-set-count">${s.count}条</span><button class="dm-load-btn" data-bvid="${escHtml(s.bvid)}">加载</button></div>`).join('')
       : '<div class="dm-empty">暂无弹幕 · <a id="dms-open-manager" href="#">去提取</a></div>';
 
     popup.innerHTML = `
@@ -555,6 +605,8 @@
         <option value="topHalf" ${state.displayArea==='topHalf'?'selected':''}>上半</option>
         <option value="bottomHalf" ${state.displayArea==='bottomHalf'?'selected':''}>下半</option>
       </select></div>
+      <div class="dm-row"><span>时间偏移</span><input type="range" id="dms-offset" min="-30" max="30" step="0.5" value="${state.offset}"></div>
+      <div class="dm-row" style="color:#777;font-size:10px;">正数=弹幕后移（YouTube 比B站长时调正）</div>
       <div class="dm-btn-row">
         <button class="dm-btn ${state.enabled?'dm-btn-on':'dm-btn-off'}" id="dms-toggle">${state.enabled?'弹幕 ON':'弹幕 OFF'}</button>
       </div>
@@ -614,6 +666,12 @@
       popup.querySelector('#dms-area').addEventListener('change', function() {
         applySetting('displayArea', this.value);
       });
+      popup.querySelector('#dms-offset').addEventListener('input', function() {
+        state.offset = parseFloat(this.value);
+        const v = findVideo();
+        if (v && state.enabled) state.currentIdx = lowerBound(v.currentTime + state.leadTime);
+        saveSettings();
+      });
       popup.querySelector('#dms-toggle').addEventListener('click', (e) => {
         e.stopPropagation();
         toggleEnabled();
@@ -644,16 +702,21 @@
   }
 
   // ============================================================
-  // 设置持久化
+  // 设置持久化（防抖：滑杆拖动每秒几十次 input 事件，只落盘最终值）
   // ============================================================
+  let _saveTimer = null;
   function saveSettings() {
-    chrome.storage.local.set({ danmaku_settings: {
-      opacity: state.opacity,
-      fontSize: state.fontSize,
-      speed: state.speed,
-      displayArea: state.displayArea,
-      enabled: state.enabled
-    }});
+    if (_saveTimer) clearTimeout(_saveTimer);
+    _saveTimer = setTimeout(() => {
+      chrome.storage.local.set({ danmaku_settings: {
+        opacity: state.opacity,
+        fontSize: state.fontSize,
+        speed: state.speed,
+        displayArea: state.displayArea,
+        offset: state.offset,
+        enabled: state.enabled
+      }});
+    }, 300);
   }
 
   async function loadSettings() {
@@ -665,6 +728,7 @@
         state.fontSize = s.fontSize || 22;
         state.speed = s.speed || 1.0;
         state.displayArea = s.displayArea || 'full';
+        state.offset = s.offset || 0;
         state.enabled = s.enabled !== false;
       }
     } catch(e) {}
@@ -676,16 +740,8 @@
   function startRendering() {
     if (!state.danmaku.length) return;
     state.enabled = true;
-    state.currentIdx = 0;
     state.lastTime = findVideo()?.currentTime || 0;
-    // 二分查找当前位置
-    let lo = 0, hi = state.sorted.length;
-    while (lo < hi) {
-      const mid = (lo + hi) >> 1;
-      if (state.sorted[mid].time < state.lastTime) lo = mid + 1;
-      else hi = mid;
-    }
-    state.currentIdx = lo;
+    state.currentIdx = lowerBound(state.lastTime + state.leadTime);
     if (!state.animationId) state.animationId = requestAnimationFrame(tick);
     updateControlsUI();
   }
@@ -693,12 +749,12 @@
   function stopRendering() {
     state.enabled = false;
     if (state.animationId) { cancelAnimationFrame(state.animationId); state.animationId = null; }
-    // 清除所有弹幕
-    state.pool.forEach(p => { p.el.style.display = 'none'; p.inUse = false; });
-    state.topPool.forEach(p => { p.el.style.display = 'none'; p.inUse = false; if (p.timeout) clearTimeout(p.timeout); });
-    state.bottomPool.forEach(p => { p.el.style.display = 'none'; p.inUse = false; if (p.timeout) clearTimeout(p.timeout); });
+    clearScreen();
     updateControlsUI();
   }
+
+  // 加载重试句柄：unload/导航后取消 pending 重试，防止弹幕"复活"
+  let _loadRetryTimer = null;
 
   async function loadDanmaku(danmakuSet) {
     if (!danmakuSet || !danmakuSet.danmaku) return;
@@ -706,10 +762,18 @@
     state.sorted = [...danmakuSet.danmaku].sort((a, b) => a.time - b.time);
     state.currentIdx = 0;
     if (!createOverlay()) {
-      // 页面上还没有video，稍后重试
-      setTimeout(() => loadDanmaku(danmakuSet), 2000);
+      // 页面上还没有video，稍后重试（最多 30 次，且 unload 后取消）
+      let retries = danmakuSet._retries || 0;
+      if (retries >= 30) return;
+      danmakuSet._retries = retries + 1;
+      if (_loadRetryTimer) clearTimeout(_loadRetryTimer);
+      _loadRetryTimer = setTimeout(() => {
+        if (state.unloaded) return;
+        loadDanmaku(danmakuSet).catch(() => {});
+      }, 2000);
       return;
     }
+    if (_loadRetryTimer) { clearTimeout(_loadRetryTimer); _loadRetryTimer = null; }
     initPool();
     createControls();
     createPlayerButton();
@@ -717,7 +781,7 @@
     startSyncLoop();
     if (state.controls) {
       state.controls.querySelector('#wdm-info').textContent =
-        `已加载 ${danmakuSet.title.substring(0, 20)} (${danmakuSet.count}条)`;
+        `已加载 ${(danmakuSet.title || '').substring(0, 20)} (${danmakuSet.count}条)`;
     }
     if (state.enabled) startRendering();
     updateControlsUI();
@@ -736,10 +800,14 @@
   // ============================================================
   chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     if (message.type === 'DANMAKU_LOAD') {
-      loadDanmaku(message.data).then(() => sendResponse({ success: true }));
+      loadDanmaku(message.data)
+        .then(() => sendResponse({ success: true }))
+        .catch(err => sendResponse({ success: false, error: err?.message || '加载失败' }));
       return true;
     }
     if (message.type === 'DANMAKU_UNLOAD') {
+      state.unloaded = true;
+      if (_loadRetryTimer) { clearTimeout(_loadRetryTimer); _loadRetryTimer = null; }
       stopRendering();
       state.danmaku = []; state.sorted = [];
       if (state.controls) state.controls.querySelector('#wdm-info').textContent = '未加载弹幕';
@@ -809,6 +877,15 @@
         .wdm-set-info .wdm-set-meta{font-size:11px;color:#888;margin-top:2px;}
         .wdm-set-actions{display:flex;gap:6px;flex-shrink:0;}
         .wdm-status{text-align:center;color:#888;font-size:12px;padding:8px;}
+        .wdm-adv{margin-bottom:10px;}
+        .wdm-check{display:flex;align-items:center;gap:6px;font-size:12px;color:#aaa;
+          cursor:pointer;margin-bottom:8px;user-select:none;}
+        .wdm-check input{accent-color:#6366f1;}
+        .wdm-adv input[type=text]{width:100%;box-sizing:border-box;padding:7px 10px;
+          border-radius:8px;border:1px solid rgba(255,255,255,0.15);
+          background:rgba(255,255,255,0.06);color:#fff;font-size:11px;outline:none;
+          font-family:inherit;}
+        .wdm-adv input[type=text]:focus{border-color:#6366f1;}
       </style>
       <div class="wdm-panel-title">
         🎬 弹幕管理姬
@@ -818,6 +895,10 @@
         <div class="wdm-input-row">
           <input type="text" id="wdm-bvid-input" placeholder="输入B站视频链接或BV号" autofocus>
           <button class="wdm-btn-primary" id="wdm-crawl-btn">提取弹幕</button>
+        </div>
+        <div class="wdm-adv">
+          <label class="wdm-check"><input type="checkbox" id="wdm-history"> 完整模式（含历史弹幕，弹幕更全）</label>
+          <input type="text" id="wdm-cookie-input" placeholder="SESSDATA Cookie（可选，完整模式/被风控时需要）">
         </div>
         <div class="wdm-status" id="wdm-panel-status"></div>
         <div id="wdm-sets-list"></div>
@@ -833,10 +914,14 @@
       if (!bvid) return;
       const btn = panel.querySelector('#wdm-crawl-btn');
       const status = panel.querySelector('#wdm-panel-status');
+      const useHistory = panel.querySelector('#wdm-history').checked;
+      const cookie = panel.querySelector('#wdm-cookie-input').value.trim();
       btn.disabled = true;
       btn.textContent = '提取中...';
-      status.textContent = '⏳ 正在连接B站API获取弹幕...';
-      chrome.runtime.sendMessage({ type: 'DANMAKU_CRAWL', bvid }, (resp) => {
+      status.textContent = useHistory
+        ? '⏳ 完整模式：正在抓取实时 + 历史弹幕，可能需要较长时间...'
+        : '⏳ 正在连接B站API获取弹幕...';
+      chrome.runtime.sendMessage({ type: 'DANMAKU_CRAWL', bvid, useHistory, cookie }, (resp) => {
         if (resp?.success) {
           status.textContent = '⏳ 弹幕提取中，完成后将自动加载...';
           // 轮询检查弹幕是否已加载，最多等30秒
