@@ -5,21 +5,38 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title id="pageTitle">已休眠</title>
   <link id="favicon" rel="icon" href="../icons/icon-16.png">
+  <script>
+    // 应用全局外观偏好（设置页/弹窗里设置的 uiConfig.theme），须在样式生效前执行避免闪色
+    (function () {
+      try {
+        chrome.storage.sync.get('uiConfig', function (r) {
+          var t = r && r.uiConfig && r.uiConfig.theme;
+          if (t === 'light' || t === 'dark') {
+            document.documentElement.style.colorScheme = t;
+          } else if (t === 'auto' || t === undefined || t === null) {
+            document.documentElement.style.colorScheme = 'light dark';
+          }
+        });
+      } catch (e) { /* 非扩展环境预览时忽略 */ }
+    })();
+  </script>
   <style>
     *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+    :root{color-scheme:light dark}
     body{
       font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","Inter",Roboto,"PingFang SC","Microsoft YaHei",sans-serif;
-      background:linear-gradient(135deg,#f8f9fb 0%,#eef0f6 100%);
+      background:linear-gradient(135deg,light-dark(#f8f9fb,#101014) 0%,light-dark(#eef0f6,#16161d) 100%);
       display:flex;flex-direction:column;align-items:center;justify-content:center;
-      min-height:100vh;color:#1a1a2e;cursor:pointer;
+      min-height:100vh;color:light-dark(#1a1a2e,#f0f0f5);cursor:pointer;
       -webkit-font-smoothing:antialiased;user-select:none;
     }
     .card{
-      background:#fff;border-radius:20px;box-shadow:0 8px 40px rgba(20,20,40,0.08);
+      background:light-dark(#fff,#1a1a21);border-radius:20px;
+      box-shadow:0 8px 40px light-dark(rgba(20,20,40,0.08),rgba(0,0,0,0.5));
       padding:40px 48px;text-align:center;max-width:520px;width:90%;
       transition:transform 0.2s,box-shadow 0.2s;position:relative;z-index:2;
     }
-    .card:hover{transform:translateY(-2px);box-shadow:0 12px 48px rgba(20,20,40,0.12);}
+    .card:hover{transform:translateY(-2px);box-shadow:0 12px 48px light-dark(rgba(20,20,40,0.12),rgba(0,0,0,0.6));}
     .card:active{transform:scale(0.98);}
     .icon-circle{
       width:64px;height:64px;border-radius:50%;
@@ -32,19 +49,21 @@
     .icon-circle svg{width:28px;height:28px;stroke:#fff;fill:none;stroke-width:2.5;stroke-linecap:round;stroke-linejoin:round}
     .title-row{display:flex;align-items:center;justify-content:center;gap:10px;margin-bottom:8px;}
     .title-row img{width:20px;height:20px;flex-shrink:0;}
-    h2{font-size:18px;font-weight:650;color:#1a1a2e;word-break:break-all;line-height:1.3;}
+    h2{font-size:18px;font-weight:650;color:light-dark(#1a1a2e,#f0f0f5);word-break:break-all;line-height:1.3;}
     .url-text{
-      display:inline-block;font-size:12px;color:#9ca3af;margin-top:6px;
+      display:inline-block;font-size:12px;color:light-dark(#9ca3af,#74768a);margin-top:6px;
       word-break:break-all;max-width:100%;opacity:0.8;
     }
     .divider-line{width:40px;height:3px;border-radius:3px;background:linear-gradient(90deg,#6366f1,#a855f7);margin:18px auto;}
-    .hint{font-size:14px;color:#6b7280;line-height:1.6;}
-    .hint strong{color:#6366f1;font-weight:600;}
+    .hint{font-size:14px;color:light-dark(#6b7280,#a7a9b8);line-height:1.6;}
+    .hint strong{color:#818cf8;font-weight:600;}
     .watermark{
-      position:fixed;bottom:18px;right:18px;font-size:10px;color:#c8c8d0;
+      position:fixed;bottom:18px;right:18px;font-size:10px;color:light-dark(#c8c8d0,#4a4b5c);
       display:flex;align-items:center;gap:4px;z-index:1;
     }
     .watermark svg{width:12px;height:12px;}
+    .watermark svg circle,.watermark svg path{stroke:light-dark(#c8c8d0,#4a4b5c);}
+    .watermark svg circle:last-of-type{fill:light-dark(#c8c8d0,#4a4b5c);}
     .ripple{position:fixed;border-radius:50%;background:rgba(99,102,241,0.08);transform:scale(0);animation:rippleEffect 0.8s ease-out;pointer-events:none;z-index:3;}
     @keyframes rippleEffect{to{transform:scale(4);opacity:0}}
   </style>

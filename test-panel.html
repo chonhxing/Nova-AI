@@ -1,0 +1,47 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <title>无极悬浮窗预览</title>
+  <style>
+    body { font-family: system-ui; padding: 40px; background: #f6f7f9; color: #222; }
+    p.demo { max-width: 640px; line-height: 1.8; color: #555; }
+  </style>
+</head>
+<body>
+  <h1>示例页面</h1>
+  <p class="demo">这个页面用于在浏览器里预览无极的页内悬浮聊天窗（content script 的 Shadow DOM UI）。真实环境中悬浮窗由扩展消息触发；这里通过 window.createChatPanel / toggleChatPanel 直接拉起。</p>
+
+  <script>
+    // —— chrome.* mock：只覆盖 content.js 启动所需的最小面 ——
+    const listeners = [];
+    window.chrome = {
+      runtime: {
+        getManifest: () => ({ version: '3.5.0' }),
+        onMessage: { addListener: (fn) => listeners.push(fn) },
+        sendMessage: (msg, cb) => {
+          if (cb) setTimeout(() => cb({ success: true }), 30);
+          return Promise.resolve({ success: true });
+        },
+        getURL: (p) => p,
+        lastError: null,
+      },
+      storage: {
+        sync: {
+          get: (keys, cb) => { setTimeout(() => cb({}), 10); },
+        },
+        local: {
+          get: (keys, cb) => { setTimeout(() => cb({}), 10); },
+          set: (obj, cb) => { if (cb) setTimeout(cb, 10); return Promise.resolve(); },
+          remove: () => {},
+        },
+      },
+      tabs: {
+        sendMessage: (tabId, msg) => Promise.resolve(),
+        query: async () => [{ id: 1, url: location.href }],
+      },
+    };
+  </script>
+  <script src="/libs/content.js"></script>
+</body>
+</html>

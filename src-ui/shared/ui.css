@@ -1,0 +1,245 @@
+/**
+ * 无极 — 设置页/弹窗通用 UI 类（配合 Vue 使用，类名保持语义化）
+ */
+
+/* ===== 卡片 ===== */
+.card {
+  background: var(--bg-elevated);
+  border: 1px solid var(--hairline);
+  border-radius: var(--r-lg);
+  padding: 20px 22px;
+  margin-bottom: 14px;
+  box-shadow: var(--shadow-1);
+}
+.card-title {
+  font-size: 14px;
+  font-weight: 650;
+  letter-spacing: -0.2px;
+  margin-bottom: 14px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--fg);
+}
+.card-title .wicon {
+  color: var(--accent);
+}
+
+/* ===== 设置行：左文案右控件 ===== */
+.row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 9px 0;
+}
+.row + .row {
+  border-top: 1px solid var(--hairline);
+}
+.row-main {
+  min-width: 0;
+}
+.row-label {
+  font-size: 13px;
+  font-weight: 550;
+  color: var(--fg);
+}
+.row-desc {
+  font-size: 11.5px;
+  color: var(--fg-3);
+  margin-top: 2px;
+  line-height: 1.5;
+}
+
+/* ===== 表单 ===== */
+.field {
+  margin-bottom: 14px;
+}
+.field > label {
+  display: block;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--fg-2);
+  margin-bottom: 6px;
+}
+.field .hint,
+.hint {
+  font-size: 11.5px;
+  color: var(--fg-3);
+  margin-top: 5px;
+  line-height: 1.5;
+}
+input[type='text'],
+input[type='password'],
+input[type='url'],
+select,
+textarea {
+  width: 100%;
+  padding: 9px 12px;
+  border-radius: var(--r-sm);
+  border: 1px solid var(--hairline);
+  background: var(--bg-input);
+  color: var(--fg);
+  font-size: 13px;
+  outline: none;
+  transition: border-color var(--t), box-shadow var(--t), background var(--t);
+}
+input:focus,
+select:focus,
+textarea:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+  background: var(--bg-elevated);
+}
+input::placeholder,
+textarea::placeholder {
+  color: var(--fg-faint);
+}
+select {
+  cursor: pointer;
+  appearance: none;
+  -webkit-appearance: none;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%239a9cab' stroke-width='2.4' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='6 9 12 15 18 9'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 11px center;
+  padding-right: 32px;
+}
+input[type='color'] {
+  width: 52px;
+  height: 32px;
+  padding: 2px;
+  border-radius: var(--r-sm);
+  border: 1px solid var(--hairline);
+  background: var(--bg-input);
+  cursor: pointer;
+}
+
+/* ===== 按钮 ===== */
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 9px 18px;
+  border-radius: var(--r-sm);
+  border: 1px solid transparent;
+  font-size: 12.5px;
+  font-weight: 600;
+  transition: all var(--t);
+  background: transparent;
+  color: var(--fg);
+}
+.btn-primary {
+  background: var(--accent);
+  color: #fff;
+}
+.btn-primary:hover {
+  background: var(--accent-strong);
+}
+.btn-outline {
+  border-color: var(--accent-line);
+  color: var(--accent);
+}
+.btn-outline:hover {
+  background: var(--accent-soft);
+}
+.btn-danger {
+  background: var(--danger-soft);
+  color: var(--danger);
+  border-color: rgba(239, 68, 68, 0.22);
+}
+.btn-danger:hover {
+  background: rgba(239, 68, 68, 0.16);
+}
+.btn-sm {
+  padding: 6px 12px;
+  font-size: 11.5px;
+}
+.btn:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+.btn-row {
+  display: flex;
+  gap: 10px;
+  margin-top: 14px;
+  flex-wrap: wrap;
+}
+
+/* ===== 状态提示 ===== */
+.status {
+  margin-top: 12px;
+  padding: 9px 13px;
+  border-radius: var(--r-sm);
+  font-size: 12px;
+  line-height: 1.5;
+  word-break: break-all;
+}
+.status.success {
+  background: var(--ok-soft);
+  color: var(--ok);
+}
+.status.error {
+  background: var(--danger-soft);
+  color: var(--danger);
+}
+.status.info {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+/* ===== 链接 ===== */
+.link {
+  color: var(--accent);
+  text-decoration: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+}
+.link:hover {
+  text-decoration: underline;
+}
+
+/* ===== 统计卡 ===== */
+.stat-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 10px;
+}
+.stat-card {
+  text-align: center;
+  padding: 14px 8px;
+  border-radius: var(--r);
+  border: 1px solid var(--hairline);
+  background: var(--bg-soft);
+}
+.stat-card .num {
+  font-size: 22px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+.stat-card .label {
+  font-size: 11px;
+  color: var(--fg-3);
+  margin-top: 3px;
+}
+
+/* ===== 列表项（过滤列表/白名单） ===== */
+.list-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 13px;
+  margin-bottom: 6px;
+  border-radius: var(--r-sm);
+  border: 1px solid var(--hairline);
+  background: var(--bg-elevated);
+}
+.list-item .list-name {
+  font-size: 12.5px;
+  font-weight: 550;
+}
+.list-item .list-desc {
+  font-size: 11px;
+  color: var(--fg-3);
+}

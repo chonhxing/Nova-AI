@@ -495,6 +495,7 @@
   // ============================================================
   let _playerBtn = null;
   let _btnObserver = null;
+  let _btnCheckPending = false;
 
   function getPlayerBtnSVG(active) {
     const color = active ? '#6366f1' : 'currentColor';
@@ -693,10 +694,14 @@
 
   function startButtonObserver() {
     if (_btnObserver) return;
+    // 播放器按钮只对 B 站有意义；节流避免全页 DOM 变化时高频重建检查
     _btnObserver = new MutationObserver(() => {
-      if (!_playerBtn || !_playerBtn.isConnected) {
-        createPlayerButton();
-      }
+      if (_btnCheckPending) return;
+      _btnCheckPending = true;
+      setTimeout(() => {
+        _btnCheckPending = false;
+        if (!_playerBtn || !_playerBtn.isConnected) createPlayerButton();
+      }, 500);
     });
     _btnObserver.observe(document.body, { childList: true, subtree: true });
   }
@@ -789,10 +794,14 @@
     saveSettings();
   }
 
+  // 播放器按钮（全页 MutationObserver 的唯一来源）只在 B 站有意义，
+  // 其余网站不启动观察器，省掉常驻 DOM 监听开销
+  const IS_BILIBILI = /(^|\.)bilibili\.com$/i.test(location.hostname);
+
   async function init() {
     await loadSettings();
-    startButtonObserver();
-    // 不自动加载弹幕，等用户在播放器按钮中选择
+    if (IS_BILIBILI) startButtonObserver();
+    // 不自动加载弹幕，等用户在播放器按钮中选择（其他网站仍可通过弹窗手动加载）
   }
 
   // ============================================================

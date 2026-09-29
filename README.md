@@ -7,7 +7,7 @@
 **网页翻译、AI 对话、知识库、广告过滤 — 装一个扩展就够**
 
 ![Manifest V3](https://img.shields.io/badge/Manifest-V3-blue?logo=googlechrome&logoColor=white)
-![Version](https://img.shields.io/badge/Version-3.4.0-6366f1)
+![Version](https://img.shields.io/badge/Version-3.5.0-6366f1)
 ![License](https://img.shields.io/badge/License-MIT-green)
 ![Platform](https://img.shields.io/badge/Platform-Chromium-orange?logo=chromewebstore&logoColor=white)
 
@@ -19,7 +19,7 @@
 
 | 模块 | 说明 |
 | --- | --- |
-| 网页翻译 | 双语对照翻译，免费 Google / Microsoft 引擎开箱可用，也可接 AI 模型。支持悬停翻译、输入框翻译 |
+| 网页翻译 | 双语对照翻译，内置百度翻译大模型 / 通用版与免费 Google / Microsoft 引擎，也可接 AI 模型。支持悬停翻译、输入框翻译、翻译指令 |
 | AI 对话 | 侧边栏聊天，流式输出，多轮对话，可以配置系统提示词 |
 | 图片识别 | 选页面上的图片发给视觉模型，做 OCR 或内容理解 |
 | 知识库 | 保存网页 / 对话 / 文件，全文搜索、标签、高亮批注、知识图谱 |
@@ -32,9 +32,9 @@
 
 基于 OpenAI 兼容 API，填个 Key 就能用：
 
-**国内** DeepSeek · 通义千问 · 智谱 GLM · Kimi · 讯飞星火 · Yi · 文心一言 · MiniMax · 百川 · 阶跃星辰 · 硅基流动
+**国内** DeepSeek · 通义千问 · 智谱 GLM · Kimi · 讯飞星火 · Yi · 百度千帆 · MiniMax · 百川 · 阶跃星辰 · 硅基流动
 
-**国外** OpenAI · Claude · Groq · Mistral · Cohere · Perplexity
+**国外** OpenAI · Claude · Groq · Mistral · Cohere · Perplexity · OpenRouter
 
 **视觉模型** 智谱 AI · 通义千问 · Kimi · 阶跃星辰 · OpenAI · Gemini · Claude
 
@@ -53,9 +53,23 @@ git clone https://github.com/chonhxing/---AI-.git
 3. 点「加载已解压的扩展程序」，选仓库根目录
 4. 点工具栏的无极图标 → 设置，填 API Key
 
+> 仓库里的 `ui/` 已经是构建好的产物，不需要 Node 环境就能直接加载。
+
 ### 直接下载
 
 点仓库 **Code → Download ZIP**，解压后同样操作。
+
+### 参与开发（改界面）
+
+弹窗和设置页用 Vue 3 编写，源码在 `src-ui/`：
+
+```bash
+npm install
+npm run build     # 产物输出到 ui/
+npm run watch     # 改动自动重建
+```
+
+其他部分（service-worker、content script、libs）是零构建的原生 JS，改完刷新扩展即生效。
 
 ## 配置
 
@@ -68,6 +82,7 @@ git clone https://github.com/chonhxing/---AI-.git
 ## 技术栈
 
 - Manifest V3（Service Worker + Content Script）
+- Vue 3 + Vite（弹窗 / 设置页，预编译产物入库）
 - Shadow DOM 隔离样式
 - IndexedDB 本地存储
 - FTS 倒排索引 + BM25 检索
@@ -81,11 +96,13 @@ git clone https://github.com/chonhxing/---AI-.git
 无极/
 ├── manifest.json          # 扩展配置
 ├── service-worker.js      # 后台服务
-├── ui/                    # 界面
-│   ├── popup.html/js/css  # 工具栏弹窗
+├── src-ui/                # 界面源码（Vue 3，npm run build 编译到 ui/）
+├── ui/                    # 界面（构建产物 + 休眠页）
+│   ├── popup.html/js      # 工具栏弹窗
 │   ├── options.html/js    # 设置页
 │   └── suspended.html/js  # 休眠页
 ├── libs/
+│   ├── providers.js       # AI 服务商目录（单一数据源）
 │   ├── content.js         # 页面脚本
 │   ├── translator.js      # 翻译
 │   ├── kb-core.js         # 知识库

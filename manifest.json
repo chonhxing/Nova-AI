@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "无极",
-  "version": "3.4.0",
+  "version": "3.6.0",
   "description": "无极 — 网页翻译、AI 对话、知识库、广告过滤，一个扩展搞定",
   "icons": {
     "16": "icons/icon-16.png",
@@ -18,7 +18,8 @@
     "declarativeNetRequest",
     "alarms",
     "webRequest",
-    "debugger"
+    "debugger",
+    "downloads"
   ],
   "host_permissions": [
     "<all_urls>"

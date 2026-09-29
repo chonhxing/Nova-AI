@@ -978,6 +978,9 @@ const KBAiConversation = {
 // 8. AI 记忆系统（借鉴 EC AiMemory）
 // ============================================================
 const KBAiMemory = {
+  // 记忆条数上限：超限删最旧，防止 kb_ai_memories 无限增长
+  MAX_MEMORIES: 300,
+
   async remember(type, content) {
     const record = {
       type, // learned | preference | correction
@@ -985,7 +988,33 @@ const KBAiMemory = {
       created_at: Date.now(),
       updated_at: Date.now(),
     };
-    return await _dbAdd('kb_ai_memories', record);
+    const id = await _dbAdd('kb_ai_memories', record);
+    this._prune();
+    return id;
+  },
+
+  async _prune() {
+    try {
+      const db = await openKBDB();
+      const tx = db.transaction('kb_ai_memories', 'readwrite');
+      const store = tx.objectStore('kb_ai_memories');
+      const countReq = store.count();
+      countReq.onsuccess = () => {
+        const overflow = countReq.result - this.MAX_MEMORIES;
+        if (overflow <= 0) return;
+        let removed = 0;
+        const cur = store.openCursor(); // 主键自增 = 插入顺序，从头删即最旧
+        cur.onsuccess = () => {
+          const c = cur.result;
+          if (!c || removed >= overflow) return;
+          removed++;
+          c.delete();
+          c.continue();
+        };
+      };
+      tx.oncomplete = () => db.close();
+      tx.onerror = () => db.close();
+    } catch (e) { /* 清理失败不影响主流程 */ }
   },
 
   async recall(query = null, limit = 5) {

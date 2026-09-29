@@ -1,5 +1,5 @@
 /**
- * 无极 — Content Script V3.3
+ * 无极 — Content Script
  * 功能：
  *   1. 页面内容提取（发送到 SW 存储）
  *   2. 悬浮聊天窗（Shadow DOM 隔离）
@@ -7,6 +7,15 @@
  *   4. ActionExecutor 原子操作
  *   5. 视频字幕提取
  */
+
+// 注入幂等守卫：扩展重载后旧脚本的监听器残留是错位消息的常见来源，二次执行直接退出
+if (window.__wujiContentLoaded) {
+  throw new Error('[无极] content script 已初始化，跳过重复注入');
+}
+window.__wujiContentLoaded = true;
+
+// 版本号从 manifest 动态读取（单一数据源），UI 不再硬编码
+const APP_VERSION = (typeof chrome !== 'undefined' && chrome.runtime?.getManifest?.()?.version) || '';
 
 // ============================================================
 // 全局状态
@@ -57,6 +66,9 @@ const ICO = {
   x: '<svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>',
   image: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>',
   compress: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="4 14 10 14 10 20"/><polyline points="20 10 14 10 14 4"/><line x1="14" y1="10" x2="21" y2="3"/><line x1="3" y1="21" x2="10" y2="14"/></svg>',
+  sun: '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41"/></svg>',
+  monitor: '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="20" height="14" rx="2" ry="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>',
+  moonCrescent: '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>',
 };
 
 // ============================================================
@@ -145,33 +157,39 @@ const CHAT_STYLES = `
 
   :host {
     /* —— 色彩系统：克制、单一强调色 —— */
-    --bg-primary: #ffffff;
-    --bg-canvas: #fbfbfd;
-    --bg-soft: #f5f6f8;
-    --bg-input: #f4f4f6;
-    --text-primary: #0d0d12;
-    --text-secondary: #565869;
-    --text-tertiary: #9b9ba7;
-    --text-faint: #c8c8d0;
-    --accent: #6366f1;
-    --accent-hover: #4f46e5;
-    --accent-soft: rgba(99,102,241,0.07);
-    --accent-line: rgba(99,102,241,0.18);
-    --border: rgba(20,20,40,0.07);
-    --border-strong: rgba(20,20,40,0.12);
-    --danger: #ef4444;
-    --success: #22c55e;
+    --bg-primary: light-dark(#ffffff, #1a1a21);
+    --bg-canvas: light-dark(#fbfbfd, #131318);
+    --bg-soft: light-dark(#f5f6f8, #232331);
+    --bg-input: light-dark(#f4f4f6, #262632);
+    --text-primary: light-dark(#0d0d12, #f0f0f5);
+    --text-secondary: light-dark(#565869, #a7a9b8);
+    --text-tertiary: light-dark(#9b9ba7, #74768a);
+    --text-faint: light-dark(#c8c8d0, #4a4b5c);
+    --accent: light-dark(#6366f1, #818cf8);
+    --accent-hover: light-dark(#4f46e5, #a5b4fc);
+    --accent-soft: light-dark(rgba(99,102,241,0.07), rgba(129,140,248,0.14));
+    --accent-line: light-dark(rgba(99,102,241,0.18), rgba(129,140,248,0.3));
+    --border: light-dark(rgba(20,20,40,0.07), rgba(255,255,255,0.09));
+    --border-strong: light-dark(rgba(20,20,40,0.12), rgba(255,255,255,0.16));
+    --danger: light-dark(#ef4444, #f87171);
+    --success: light-dark(#22c55e, #34d399);
     --radius-sm: 8px;
     --radius: 14px;
     --radius-lg: 20px;
     --radius-xl: 26px;
-    --shadow-sm: 0 1px 2px rgba(20,20,40,0.04);
-    --shadow-md: 0 6px 24px rgba(20,20,40,0.08);
-    --shadow-lg: 0 18px 50px rgba(20,20,40,0.14), 0 0 0 1px rgba(20,20,40,0.04);
+    --shadow-sm: light-dark(0 1px 2px rgba(20,20,40,0.04), 0 1px 2px rgba(0,0,0,0.4));
+    --shadow-md: light-dark(0 6px 24px rgba(20,20,40,0.08), 0 6px 24px rgba(0,0,0,0.5));
+    --shadow-lg: light-dark(0 18px 50px rgba(20,20,40,0.14), 0 18px 50px rgba(0,0,0,0.55));
     --shadow-accent: 0 8px 24px rgba(99,102,241,0.28);
     --t: 0.18s cubic-bezier(0.4,0,0.2,1);
     --t-slow: 0.32s cubic-bezier(0.16,1,0.3,1);
+    /* 主题：light-dark() 配色随 color-scheme 解析；
+       auto='light dark' 跟随系统，浅/深色由 JS 直接改 host 的 color-scheme（见 applyChatTheme） */
+    color-scheme: light dark;
   }
+
+  /* AI 气泡底色：浅色用纯白卡片、深色压一档（随 color-scheme 自动切换） */
+  .bubble-block.ai-block .msg-bubble { background: light-dark(#ffffff, #232331); }
 
   /* —— 面板容器：浮起、大圆角、轻盈阴影 —— */
   .panel {
@@ -489,8 +507,11 @@ function createChatPanel() {
         <div class="brand-mark">
           <svg viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="8.5" stroke="#fff" stroke-width="1.6" stroke-linecap="round" stroke-dasharray="38 12" transform="rotate(-90 12 12)"/><path d="M6 12 A 6 6 0 0 1 18 12" stroke="#fff" stroke-width="1.5" stroke-linecap="round"/><path d="M6 12 A 6 6 0 0 0 18 12" stroke="#fff" stroke-width="1.5" stroke-linecap="round" opacity="0.5"/><circle cx="12" cy="12" r="1.4" fill="#fff"/></svg>
         </div>
-        <span class="title">无极<span class="ver">v3.3</span></span>
+        <span class="title">无极${APP_VERSION ? `<span class="ver">v${APP_VERSION}</span>` : ''}</span>
       </div>
+      <button class="icon-btn icon-btn--circle" id="btn-theme" title="外观：跟随系统">
+        ${ICO.monitor}
+      </button>
       <button class="icon-btn icon-btn--circle" id="btn-compress" title="压缩对话（省 tokens）">
         ${ICO.compress}
       </button>
@@ -569,9 +590,45 @@ function createChatPanel() {
   // 加载对话历史
   loadConversation();
 
+  // 应用保存的外观偏好（跟随系统/浅色/深色）
+  loadChatTheme();
+
   chatPanelVisible = true;
   panelJustCreated = true;
   setTimeout(() => { panelJustCreated = false; }, 300);
+}
+
+// ============================================================
+// 外观主题（与设置页共用 uiConfig.theme，light-dark() 随 color-scheme 切换）
+// ============================================================
+const THEME_ICONS = { auto: () => ICO.monitor, light: () => ICO.sun, dark: () => ICO.moonCrescent };
+const THEME_LABELS = { auto: '跟随系统', light: '浅色', dark: '深色' };
+let chatTheme = 'auto';
+
+function applyChatTheme(theme) {
+  chatTheme = theme;
+  if (!chatPanelEl) return;
+  chatPanelEl.style.colorScheme = theme === 'light' ? 'light' : theme === 'dark' ? 'dark' : 'light dark';
+  const btn = shadowRoot?.querySelector('#btn-theme');
+  if (btn) {
+    btn.innerHTML = (THEME_ICONS[theme] || THEME_ICONS.auto)();
+    btn.title = '外观：' + (THEME_LABELS[theme] || THEME_LABELS.auto);
+  }
+}
+
+function loadChatTheme() {
+  try {
+    chrome.storage.sync.get('uiConfig', r => {
+      const t = r?.uiConfig?.theme;
+      if (t === 'light' || t === 'dark' || t === 'auto') applyChatTheme(t);
+    });
+  } catch (e) { /* ignore */ }
+}
+
+function cycleChatTheme() {
+  const next = chatTheme === 'auto' ? 'light' : chatTheme === 'light' ? 'dark' : 'auto';
+  applyChatTheme(next);
+  try { chrome.storage.sync.set({ uiConfig: { theme: next } }); } catch (e) { /* ignore */ }
 }
 
 function bindPanelEvents(shadow) {
@@ -579,6 +636,9 @@ function bindPanelEvents(shadow) {
 
   // 关闭
   $('#btn-close').addEventListener('click', () => toggleChatPanel(false));
+
+  // 外观切换（跟随系统 → 浅色 → 深色循环）
+  $('#btn-theme').addEventListener('click', cycleChatTheme);
 
   // 压缩对话
   $('#btn-compress').addEventListener('click', () => { if (!isProcessing) handleCompress(); });
@@ -1611,8 +1671,30 @@ function scrollAndWaitForContent(selector, scrollPx = 2000, waitMs = 2000) {
 /**
  * watch_dom: 注册 MutationObserver 监听目标容器，持续报告变化
  * 返回监听 ID，可通过 STOP_DOM_WATCH 停止
+ * 所有监听器都有自动超时（AI 忘记调 STOP 也不会永久挂住）
  */
 const _domWatchers = {};
+const WATCHER_AUTO_STOP_MS = 10 * 60 * 1000; // 10 分钟
+const MAX_WATCHERS = 10;
+
+function autoStopWatcher(watcherId) {
+  const w = _domWatchers[watcherId];
+  if (!w) return;
+  w.observer.disconnect();
+  if (w.stopTimer) clearTimeout(w.stopTimer);
+  delete _domWatchers[watcherId];
+}
+
+function registerWatcher(id, entry) {
+  // 数量上限：超出时优先淘汰最早的监听器
+  const ids = Object.keys(_domWatchers);
+  if (ids.length >= MAX_WATCHERS) {
+    autoStopWatcher(ids[0]);
+  }
+  entry.stopTimer = setTimeout(() => autoStopWatcher(id), entry.stopMs || WATCHER_AUTO_STOP_MS);
+  _domWatchers[id] = entry;
+}
+
 function watchDOM(selector, reportFn, options = {}) {
   const el = document.querySelector(selector);
   if (!el) return { error: '未找到元素: ' + selector };
@@ -1645,27 +1727,28 @@ function watchDOM(selector, reportFn, options = {}) {
   });
 
   observer.observe(el, { childList: true, subtree: options.subtree !== false });
-  _domWatchers[watcherId] = { observer, selector, el };
-  return { watcherId, selector, status: 'watching' };
+  registerWatcher(watcherId, { observer, selector, el });
+  return { watcherId, selector, status: 'watching', autoStopMinutes: 10 };
 }
 
 function stopDOMWatch(watcherId) {
   const w = _domWatchers[watcherId];
   if (!w) return { error: '未找到监听器: ' + watcherId };
-  w.observer.disconnect();
-  delete _domWatchers[watcherId];
+  autoStopWatcher(watcherId);
   return { watcherId, status: 'stopped' };
 }
 
 /**
  * deepWatchDOM: 先轮询等待父元素出现，再挂 MutationObserver
  * 解决 #video-page-app 这类深层动态渲染节点的问题
+ * 观察器 5 分钟后自动断开（此前会带着空回调挂到页面卸载，阻碍 GC）
  */
 function deepWatchDOM(selector, debounceMs = 500, waitParentMs = 10000) {
   const start = Date.now();
   const watcherId = 'dw_' + Date.now() + '_' + Math.random().toString(36).substr(2, 6);
 
   function tryObserve() {
+    if (!_domWatchers[watcherId] && Date.now() - start > waitParentMs) return; // 超时或已被清理，静默失败
     const el = document.querySelector(selector);
     if (el) {
       // 找到了，注册 MutationObserver
@@ -1673,10 +1756,9 @@ function deepWatchDOM(selector, debounceMs = 500, waitParentMs = 10000) {
         // 变化发生时不做额外操作，等 get_watch_report 来取
       });
       observer.observe(el, { childList: true, subtree: true });
-      _domWatchers[watcherId] = { observer, selector, el, type: 'deep' };
+      registerWatcher(watcherId, { observer, selector, el, type: 'deep', stopMs: 5 * 60 * 1000 });
       return;
     }
-    if (Date.now() - start > waitParentMs) return; // 超时，静默失败
     setTimeout(tryObserve, 300);
   }
   tryObserve();
@@ -2235,6 +2317,15 @@ function showSponsorModal(imgUrl) {
 // ============================================================
 function init() {
   console.log('[无极] Content Script 已加载');
+  // 其他页面（设置页/弹窗）改外观偏好时，已打开的悬浮窗实时跟随
+  try {
+    chrome.storage.onChanged.addListener((changes, area) => {
+      if (area === 'sync' && changes.uiConfig) {
+        const t = changes.uiConfig.newValue?.theme;
+        if (t === 'light' || t === 'dark' || t === 'auto') applyChatTheme(t);
+      }
+    });
+  } catch (e) { /* ignore */ }
   // 页面全文自动存档默认关闭（隐私 + 存储膨胀），需在设置中开启"自动记忆访问页面"
   try {
     chrome.storage.sync.get('privacyConfig', r => {

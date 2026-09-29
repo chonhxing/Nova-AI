@@ -869,11 +869,10 @@ const KBAgent = {
       };
       
       const baseUrl = config.baseUrl.replace(/\/+$/, '');
-      const provider = config.provider || '';
-      let apiPath = '/v1/chat/completions';
-      if (provider === 'zhipu') apiPath = '/v4/chat/completions';
-      else if (provider === 'wenxin') apiPath = '/chat/completions';
-      
+      const apiPath = (typeof WUJI_CHAT_PATH === 'function')
+        ? WUJI_CHAT_PATH(config.provider)
+        : '/v1/chat/completions';
+
       const response = await fetch(`${baseUrl}${apiPath}`, {
         method: 'POST',
         headers: {
