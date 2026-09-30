@@ -6,22 +6,36 @@
   <style>
     body { font-family: system-ui; padding: 40px; background: #f6f7f9; color: #222; }
     p.demo { max-width: 640px; line-height: 1.8; color: #555; }
+    .toolbar { display: flex; gap: 10px; margin: 18px 0; flex-wrap: wrap; }
+    .toolbar button { padding: 8px 16px; border: 1px solid #c7c9d1; border-radius: 8px; background: #fff; cursor: pointer; font-size: 13px; }
+    .toolbar button:hover { border-color: #6366f1; color: #6366f1; }
   </style>
 </head>
 <body>
   <h1>示例页面</h1>
-  <p class="demo">这个页面用于在浏览器里预览无极的页内悬浮聊天窗（content script 的 Shadow DOM UI）。真实环境中悬浮窗由扩展消息触发；这里通过 window.createChatPanel / toggleChatPanel 直接拉起。</p>
+  <p class="demo">这个页面用于在浏览器里预览无极的页内悬浮聊天窗（Vue 3 懒注入 + Shadow DOM）。
+     真实环境中面板 UI（ui/panel-ui.js）由 Service Worker 经 chrome.scripting.executeScript
+     懒注入；这里通过预载该文件模拟"注入成功"，再经 window.toggleChatPanel 拉起。</p>
+  <div class="toolbar">
+    <button id="btn-open">打开面板</button>
+    <button id="btn-stream">模拟流式回复</button>
+    <button id="btn-tool">模拟工具结果</button>
+  </div>
 
   <script>
-    // —— chrome.* mock：只覆盖 content.js 启动所需的最小面 ——
+    // —— chrome.* mock：只覆盖 content.js / panel-ui.js 启动所需的最小面 ——
     const listeners = [];
     window.chrome = {
       runtime: {
-        getManifest: () => ({ version: '3.5.0' }),
+        getManifest: () => ({ version: '3.7.0' }),
         onMessage: { addListener: (fn) => listeners.push(fn) },
         sendMessage: (msg, cb) => {
-          if (cb) setTimeout(() => cb({ success: true }), 30);
-          return Promise.resolve({ success: true });
+          // INJECT_PANEL_UI：预载了 panel-ui.js，直接报告注入成功
+          const resp = msg?.type === 'INJECT_PANEL_UI'
+            ? { success: true, injected: !!window.__WUJI_PANEL__ }
+            : { success: true };
+          if (cb) setTimeout(() => cb(resp), 30);
+          return Promise.resolve(resp);
         },
         getURL: (p) => p,
         lastError: null,
@@ -40,8 +54,29 @@
         sendMessage: (tabId, msg) => Promise.resolve(),
         query: async () => [{ id: 1, url: location.href }],
       },
+      scripting: { executeScript: async () => [{ result: true }] },
     };
+    // 分发给 content.js 消息路由的辅助（模拟 SW 下发流式/工具消息）
+    window.__dispatch = (msg) => listeners.forEach((fn) => fn(msg, {}, () => {}));
   </script>
   <script src="/libs/content.js"></script>
+  <script src="/ui/panel-ui.js"></script>
+  <script>
+    document.getElementById('btn-open').addEventListener('click', () => window.toggleChatPanel(true));
+    document.getElementById('btn-stream').addEventListener('click', async () => {
+      window.toggleChatPanel(true);
+      await new Promise((r) => setTimeout(r, 400));
+      const reply = '这是**模拟流式回复**：逐字揭示每帧 3 字符，追上即停 rAF，完成后一次性渲染 Markdown。\n\n- 代码块：`const x = 1`\n- **加粗** 与 *斜体*\n\n```js\nconsole.log("hello 无极 v3.7");\n```';
+      for (const ch of reply) {
+        window.__dispatch({ type: 'AI_STREAM_DELTA', delta: ch });
+        await new Promise((r) => setTimeout(r, 8));
+      }
+      window.__dispatch({ type: 'AI_STREAM_DONE' });
+    });
+    document.getElementById('btn-tool').addEventListener('click', () => {
+      window.toggleChatPanel(true);
+      window.__dispatch({ type: 'TOOL_RESULT', tool: 'search_knowledge', success: true, summary: '命中 3 条知识库记录' });
+    });
+  </script>
 </body>
 </html>

@@ -101,7 +101,8 @@ export default {
       window.close();
     },
     async openDanmaku() {
-      await tabMessage({ type: 'OPEN_DANMAKU_PANEL' });
+      // 经 SW 中继：先懒注入弹幕引擎+面板 UI，再转发 OPEN_DANMAKU_PANEL 到标签页
+      await sendMessage({ type: 'OPEN_DANMAKU_PANEL' });
       window.close();
     },
     openOptions() {

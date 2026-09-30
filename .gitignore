@@ -21,3 +21,6 @@ node_modules/
 
 # Video Agent Kit 工作目录
 .video_agent/
+
+# ZCode 会话工作区
+.zcode/

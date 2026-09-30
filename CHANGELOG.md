@@ -1,5 +1,20 @@
 # 更新日志
 
+## v3.7.0（2026-09-29）
+
+### UI 全面拥抱 Vue 3：聊天面板 / 弹幕管理姬重写 + 懒注入架构
+
+- **页内聊天面板迁移 Vue 3**：content.js 里约 1100 行手写面板 UI（326 行 CSS + innerHTML 模板 + 事件绑定）重写为 Vue 3 组件（`src-ui/panel/chat/App.vue`），功能逐项对齐——双 Tab、空态建议卡、气泡/头像/时间行、快捷操作栏、IME 守卫输入框、知识库搜索（300ms 防抖）/收藏/删除、拖拽移动。content.js 从 2342 行瘦身到约 1270 行（-46%），只保留业务逻辑（AI 调用/压缩/知识库/历史持久化，`wuji_conversation` 存储契约不变，老用户历史无损）
+- **懒注入架构（内存核心优化）**：面板 UI 编译为独立 IIFE 包 `ui/panel-ui.js`（119KB/gzip 42KB），由 Service Worker 经 `chrome.scripting.executeScript` 在**首次打开面板时**才注入隔离世界——未打开过面板的页面零 Vue 解析与内存成本（原实现 content.js 113KB 每页常驻）。文件自带跨注入幂等守卫，重复注入不双重挂载
+- **关闭即真卸载**：关闭面板 → Vue app unmount + 宿主移除，DOM/document 监听/storage 监听/响应式树全部释放（原实现只是 display:none 常驻）；重新打开完整重挂载，历史从 storage 恢复
+- **流式渲染重写（流畅度核心）**：原实现 rAF 每帧全量重建 innerHTML + 追上后 rAF 永不停止空转；现在流式期间只更新一个文本节点（纯文本逐字揭示，每帧 3 字符、追上即停 rAF），完成后一次性渲染完整 Markdown。自动滚动仅在用户贴近底部时跟随
+- **弹幕管理姬面板迁移 Vue 3**：约 150 行 innerHTML 模板的弹幕面板重写为 `src-ui/panel/danmaku/App.vue`（BV 提取/轮询/弹幕集列表/删除）；播放器引擎（池化渲染/rAF 粒子/二分插入）保持原生保证 60fps。抓取轮询逻辑留在引擎侧经 bridge 交付
+- **弹幕引擎懒注入 + 内存修复**：danmaku-player.js（43KB）从 manifest 静态注入所有网站改为——B 站/YouTube 页面加载时自动注入（SW tabs.onUpdated），其余站点仅在打开弹幕面板时注入；非视频页省 43KB 解析与常驻内存。修复三处泄漏：`stopSyncLoop()` 从未被调用（2s 同步 interval 页面常驻）、全页 MutationObserver 永不 disconnect、卸载后 80 个池化 div 与控件残留——现在 DANMAKU_UNLOAD 时全部释放；加懒注入幂等守卫（IIFE 重复执行会因 let/const 重声明抛错）
+- **弹窗链路适配**：弹窗"弹幕管理姬"改为经 SW 中继（注入后再转发到标签页），非视频站点也能正常打开
+- **translator.js 内存/性能修复**：悬停翻译监听按需武装（`hoverEnabled` 关闭时不注册 document 级监听、不建弹窗 DOM，注意改动后需刷新页面生效）；原文缓存（originalContents）加 800 条上限防长页面无界增长；escHtml 复用单个转义 div；getComputedStyle 结果按节点 WeakMap 缓存（TreeWalker 扫描减少强制布局）
+- **设置页九分区懒加载**：全部改 `defineAsyncComponent` + 动态 import，Vite 按分区自动分包，首屏只加载当前分区
+- **构建系统**：新增 `vite.panel.config.js`（lib 模式 IIFE + `define` 替换 `process.env.NODE_ENV`——lib 模式不自动替换，浏览器无 process 直接崩，这个坑用一个浏览器 404/报错换来的）；面板样式走 JS 字符串模块 + `adoptedStyleSheets` 注入 ShadowRoot（规避 lib 模式独立 CSS 产物）
+
 ## v3.6.0（2026-09-29）
 
 ### 接入百度翻译：通用版 + 大模型文本翻译

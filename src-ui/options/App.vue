@@ -1,17 +1,20 @@
 <script>
+import { defineAsyncComponent } from 'vue';
 import WIcon from '../shared/WIcon.vue';
 import { APP_VERSION, HAS_CHROME } from '../shared/chrome.js';
 import { initTheme, setTheme, onThemeChange } from '../shared/theme.js';
 
-import LlmSection from './sections/Llm.vue';
-import VisionSection from './sections/Vision.vue';
-import TranslateSection from './sections/Translate.vue';
-import KbSection from './sections/Kb.vue';
-import AdblockSection from './sections/Adblock.vue';
-import AgentSection from './sections/Agent.vue';
-import SuspendSection from './sections/Suspend.vue';
-import CacheSection from './sections/Cache.vue';
-import AboutSection from './sections/About.vue';
+// 分区懒加载：defineAsyncComponent + 动态 import，Vite 按分区自动分包，
+// 首屏只加载当前分区（其余 8 个分区代码在导航到时才拉取）
+const LlmSection = defineAsyncComponent(() => import('./sections/Llm.vue'));
+const VisionSection = defineAsyncComponent(() => import('./sections/Vision.vue'));
+const TranslateSection = defineAsyncComponent(() => import('./sections/Translate.vue'));
+const KbSection = defineAsyncComponent(() => import('./sections/Kb.vue'));
+const AdblockSection = defineAsyncComponent(() => import('./sections/Adblock.vue'));
+const AgentSection = defineAsyncComponent(() => import('./sections/Agent.vue'));
+const SuspendSection = defineAsyncComponent(() => import('./sections/Suspend.vue'));
+const CacheSection = defineAsyncComponent(() => import('./sections/Cache.vue'));
+const AboutSection = defineAsyncComponent(() => import('./sections/About.vue'));
 
 const NAV = [
   { id: 'llm', icon: 'bot', label: '语言模型' },

@@ -253,8 +253,72 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.type === 'DANMAKU_UNLOAD_FROM_TAB') { handleDanmakuUnloadFromTab(message, sender, sendResponse); return true; }
   if (message.type === 'DANMAKU_TOGGLE_IN_TAB') { handleDanmakuToggleInTab(message, sender, sendResponse); return true; }
 
+  // ======== 面板 UI 懒注入（Vue 3 编译产物，IIFE 单文件，executeScript 懒执行）========
+  if (message.type === 'INJECT_PANEL_UI') { handleInjectPanelUI(message, sender, sendResponse); return true; }
+  if (message.type === 'INJECT_DANMAKU_UI') { handleInjectDanmakuUI(message, sender, sendResponse); return true; }
+  if (message.type === 'OPEN_DANMAKU_PANEL') { handleOpenDanmakuPanel(sender, sendResponse); return true; }
+
   return false;
 });
+
+// ============================================================
+// 面板 UI 懒注入：ui/panel-ui.js 是 Vue 3 IIFE 单文件（懒注入 IIFE）。
+// executeScript 注入到 content script 同一隔离世界（默认 isolated world），
+// 注入后 window.__WUJI_PANEL__ 对 content.js / danmaku-player.js 直接可见。
+// 文件自带幂等守卫（重复注入直接复用已挂载实例），关闭即 unmount，
+// DOM/监听/响应式树全部释放 —— 未打开过面板的页面零 Vue 解析与内存成本
+// （原实现 155KB 每页常驻解析）。
+// ============================================================
+async function handleInjectPanelUI(message, sender, sendResponse) {
+  try {
+    const tabId = sender.tab?.id;
+    if (!tabId) { sendResponse({ success: false, error: '无法确定目标标签页' }); return; }
+    await chrome.scripting.executeScript({ target: { tabId }, files: ['ui/panel-ui.js'] });
+    sendResponse({ success: true });
+  } catch (e) { sendResponse({ success: false, error: e.message }); }
+}
+
+// 弹幕引擎懒注入：libs/danmaku-player.js 从 manifest 静态注入改为按需注入
+// （B 站/YouTube 视频页由 tabs.onUpdated 自动注入，其余站点仅在打开弹幕
+// 面板时注入），未注入过的页面省 43KB 解析 + 引擎常驻内存
+async function handleInjectDanmakuUI(message, sender, sendResponse) {
+  try {
+    const tabId = sender.tab?.id;
+    if (!tabId) { sendResponse({ success: false, error: '无法确定目标标签页' }); return; }
+    await chrome.scripting.executeScript({ target: { tabId }, files: ['libs/danmaku-player.js'] });
+    sendResponse({ success: true });
+  } catch (e) { sendResponse({ success: false, error: e.message }); }
+}
+
+// 弹幕引擎注入去重（标签页维度；导航后由 onUpdated/onRemoved 清除）
+const DANMAKU_VIDEO_SITES = /(^|\.)((bilibili|bilibilitv)\.com|youtube\.com)$/i;
+const danmakuInjectedTabs = new Set();
+
+async function ensureDanmakuInjected(tabId) {
+  if (danmakuInjectedTabs.has(tabId)) return true;
+  try {
+    await chrome.scripting.executeScript({ target: { tabId }, files: ['libs/danmaku-player.js'] });
+    danmakuInjectedTabs.add(tabId);
+    return true;
+  } catch (e) { return false; }
+}
+
+// 弹窗中继：popup 发 runtime 消息，SW 注入引擎+面板 UI 后转发 OPEN_DANMAKU_PANEL 到标签页
+async function handleOpenDanmakuPanel(sender, sendResponse) {
+  try {
+    let tabId = sender.tab?.id;
+    if (!tabId) {
+      const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+      tabId = tab?.id;
+    }
+    if (!tabId) { sendResponse({ success: false, error: '无法确定目标标签页' }); return; }
+    // 引擎 + 面板 UI 一次注入（两文件都有自身幂等守卫，重复注入无害）
+    await chrome.scripting.executeScript({ target: { tabId }, files: ['libs/danmaku-player.js', 'ui/panel-ui.js'] });
+    danmakuInjectedTabs.add(tabId);
+    chrome.tabs.sendMessage(tabId, { type: 'OPEN_DANMAKU_PANEL' }, () => void chrome.runtime.lastError);
+    sendResponse({ success: true });
+  } catch (e) { sendResponse({ success: false, error: e.message }); }
+}
 
 // ======== 各个消息处理器 ========
 function handlePageContent(message, sender, sendResponse) {
@@ -1956,6 +2020,12 @@ chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
     if (changeInfo.status === 'complete' && TabSuspender.isNormalTab(tab)) {
       TabSuspender.resetTimerForTab(tab);
     }
+    // B 站/YouTube 视频页：自动注入弹幕引擎（播放器按钮），面板 UI 仍按需懒注入
+    if (changeInfo.status === 'complete' && tab?.url) {
+      try {
+        if (DANMAKU_VIDEO_SITES.test(new URL(tab.url).hostname)) ensureDanmakuInjected(tabId).catch(() => {});
+      } catch (e) { /* URL 解析失败忽略 */ }
+    }
     // 标签页被丢弃(discarded)时，自动恢复
     if (changeInfo.discarded && TabSuspender.isSuspendedTab(tab)) {
       // 如果标签页被 Chrome 丢弃但处于休眠状态，自动恢复
@@ -1980,6 +2050,7 @@ chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
 
 chrome.tabs.onRemoved.addListener((tabId) => {
   TabSuspender.clearTimerForTabId(tabId);
+  danmakuInjectedTabs.delete(tabId);
 });
 
 // 闹钟监听：安全网检查

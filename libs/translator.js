@@ -45,7 +45,17 @@
   const SKIP_TAGS = new Set(['html','body','script','style','noscript','iframe','input','textarea','select','button','code','pre','kbd','svg','canvas','video','audio','img','object','embed','math','time','abbr']);
   const INLINE_SET = new Set(['a','b','strong','span','em','i','u','small','sub','sup','font','mark','cite','q','abbr','ruby','bdi','bdo','label','time','code','var','samp']);
 
-  function escHtml(t) { const d = document.createElement('div'); d.textContent = t || ''; return d.innerHTML; }
+  // 复用单个 div 做文本转义（原实现每次调用新建 DOM 节点）
+  const _escDiv = document.createElement('div');
+  function escHtml(t) { _escDiv.textContent = t || ''; return _escDiv.innerHTML; }
+
+  // getComputedStyle 结果按节点缓存（TreeWalker 扫描会反复触发强制布局）
+  const _styleCache = new WeakMap();
+  function cachedStyle(node) {
+    let s = _styleCache.get(node);
+    if (s === undefined) { try { s = getComputedStyle(node); } catch (e) { s = null; } _styleCache.set(node, s); }
+    return s;
+  }
   function detectLang(text) {
     // 优先 WebAssembly 内核（手写 WAT，字节级统计），加载失败自动降级 JS 实现
     if (typeof WasmKernels !== 'undefined' && WasmKernels.langDetect) {
@@ -100,7 +110,7 @@
     if (node.hasAttribute(ATTR_TRANSLATED) || node.getAttribute('translate') === 'no') return true;
     if (checkTextSize(node) || isNumericContent(node)) return true;
     if (node.closest('#' + PREFIX + '-popup') || node.closest('#wuji-chat-host')) return true;
-    try { const s = getComputedStyle(node); if (s.display === 'none' || s.visibility === 'hidden' || s.opacity === '0') return true; } catch (e) {}
+    const st = cachedStyle(node); if (st && (st.display === 'none' || st.visibility === 'hidden' || st.opacity === '0')) return true;
     return false;
   }
 
@@ -224,7 +234,7 @@
     wrapper.style.cssText = `display:block;margin-top:2px;padding:4px 0 4px 10px;border-left:2px solid ${config.transColor};font-size:${config.fontSize};color:${config.transColor};line-height:1.6;border-radius:0 4px 4px 0;`;
     wrapper.textContent = text;
     // 破解可能的 overflow:hidden 截断
-    if (getComputedStyle(node).overflow === 'hidden') {
+    if ((cachedStyle(node) || {}).overflow === 'hidden') {
       node.style.overflow = 'visible';
     }
     node.appendChild(wrapper);
@@ -236,7 +246,8 @@
 
     const nodeId = 'wj-' + (nodeIdCounter++);
     node.setAttribute(ATTR_NODE_ID, nodeId);
-    // 保存原文 innerHTML 以便恢复
+    // 保存原文 innerHTML 以便恢复（上限 800 条：超出淘汰最旧，防长页面内存无界增长）
+    if (originalContents.size >= 800) originalContents.delete(originalContents.keys().next().value);
     originalContents.set(nodeId, node.innerHTML);
     node.setAttribute(ATTR_TRANSLATED, 'true');
 
@@ -482,7 +493,7 @@
         cr.translatorCache.forEach(([k, v]) => { if (transCache.size < MAX_CACHE) transCache.set(k, v); });
       }
     } catch (e) {}
-    initHoverTranslate();
+    if (config.hoverEnabled) initHoverTranslate();   // 按需武装：关闭时不注册 document 级监听、不建弹窗 DOM
     window.addEventListener('beforeunload', () => {
       if (transCache.size > 0) {
         const arr = [...transCache.entries()].slice(-1000);

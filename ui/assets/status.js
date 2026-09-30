@@ -1,0 +1,1 @@
+import{C as a}from"./ui.js";function s(){const t=a({text:"",type:"info"});let e=null;return{status:t,show(i,r="info",o=3e3){clearTimeout(e),t.text=i,t.type=r,o&&(e=setTimeout(()=>{t.text=""},o))}}}export{s as c};

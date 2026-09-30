@@ -5,6 +5,12 @@
 (function() {
   'use strict';
 
+  // 懒注入幂等守卫：executeScript 可能重复执行本文件（B站/YouTube 页面加载 +
+  // 弹幕面板打开都会注入），二次执行直接退出 —— IIFE 内 let/const 重复声明会抛
+  // SyntaxError 打断整个文件，必须先守卫
+  if (window.__WUJI_DANMAKU__) return;
+  window.__WUJI_DANMAKU__ = true;
+
   const MODE_SCROLL = 1;
   const MODE_BOTTOM = 4;
   const MODE_TOP = 5;
@@ -817,9 +823,14 @@
     if (message.type === 'DANMAKU_UNLOAD') {
       state.unloaded = true;
       if (_loadRetryTimer) { clearTimeout(_loadRetryTimer); _loadRetryTimer = null; }
+      stopSyncLoop();   // 停 2s 同步循环（原实现从未调用——引擎常驻泄漏）
       stopRendering();
+      if (_btnObserver) { _btnObserver.disconnect(); _btnObserver = null; }   // 释放全页观察器
+      _btnCheckPending = false;
       state.danmaku = []; state.sorted = [];
-      if (state.controls) state.controls.querySelector('#wdm-info').textContent = '未加载弹幕';
+      if (state.overlay) { state.overlay.remove(); state.overlay = null; }    // 控件与 80 个池化 div 随宿主一起释放
+      state.controls = null;
+      state.pool = []; state.topPool = []; state.bottomPool = [];
       updateControlsUI();
       updatePlayerButton();
       sendResponse({ success: true });
@@ -844,154 +855,85 @@
   // ============================================================
   // 弹幕管理面板 (浮动对话框)
   // ============================================================
-  function showDanmakuPanel() {
-    let panel = document.getElementById('wuji-danmaku-panel');
-    if (panel) { panel.style.display = 'flex'; return; }
+  // ============================================================
+  // 弹幕管理面板（Vue 3 懒挂载：ui/panel-ui.js 的 mountDanmaku）
+  // 面板 UI 是独立 IIFE 包（Vue 3 编译产物），首次打开时经 SW 懒注入本隔离
+  // 世界后挂载；关闭即 unmount —— DOM/监听/响应式树全部释放（原实现
+  // display:none 常驻）。抓取轮询与列表数据留在引擎侧，经 bridge 单向交给 Vue。
+  // ============================================================
+  let danmakuPanelApi = null;
 
-    panel = document.createElement('div');
-    panel.id = 'wuji-danmaku-panel';
-    panel.innerHTML = `
-      <style>
-        #wuji-danmaku-panel{position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);
-          z-index:2147483647;width:420px;max-height:70vh;background:rgba(0,0,0,0.92);
-          border-radius:16px;color:#e0e0e0;display:flex;flex-direction:column;
-          font-family:"PingFang SC","Microsoft YaHei",sans-serif;font-size:13px;
-          box-shadow:0 8px 40px rgba(0,0,0,0.5);border:1px solid rgba(255,255,255,0.1);
-          overflow:hidden;}
-        .wdm-panel-title{display:flex;align-items:center;justify-content:space-between;
-          padding:14px 18px;border-bottom:1px solid rgba(255,255,255,0.1);
-          font-size:15px;font-weight:600;}
-        .wdm-panel-close{cursor:pointer;opacity:0.6;font-size:18px;line-height:1;
-          background:none;border:none;color:#fff;padding:0 4px;}
-        .wdm-panel-close:hover{opacity:1;}
-        .wdm-panel-body{padding:16px 18px;overflow-y:auto;flex:1;}
-        .wdm-input-row{display:flex;gap:8px;margin-bottom:14px;}
-        .wdm-input-row input{flex:1;padding:8px 12px;border-radius:8px;border:1px solid rgba(255,255,255,0.15);
-          background:rgba(255,255,255,0.06);color:#fff;font-size:13px;outline:none;
-          font-family:inherit;}
-        .wdm-input-row input:focus{border-color:#6366f1;}
-        .wdm-input-row button{padding:8px 16px;border-radius:8px;border:none;cursor:pointer;
-          font-size:12px;font-weight:600;font-family:inherit;transition:all 0.15s;}
-        .wdm-btn-primary{background:linear-gradient(135deg,#6366f1,#a855f7);color:#fff;}
-        .wdm-btn-primary:hover{opacity:0.9;}
-        .wdm-btn-danger{background:rgba(239,68,68,0.2);color:#ef4444;}
-        .wdm-btn-danger:hover{background:rgba(239,68,68,0.35);}
-        .wdm-btn-sm{padding:5px 10px;font-size:11px;border-radius:6px;border:none;cursor:pointer;
-          font-family:inherit;transition:all 0.15s;}
-        .wdm-set-item{display:flex;align-items:center;justify-content:space-between;
-          padding:10px 0;border-bottom:1px solid rgba(255,255,255,0.06);}
-        .wdm-set-info{flex:1;min-width:0;}
-        .wdm-set-info .wdm-set-title{font-weight:500;white-space:nowrap;overflow:hidden;
-          text-overflow:ellipsis;}
-        .wdm-set-info .wdm-set-meta{font-size:11px;color:#888;margin-top:2px;}
-        .wdm-set-actions{display:flex;gap:6px;flex-shrink:0;}
-        .wdm-status{text-align:center;color:#888;font-size:12px;padding:8px;}
-        .wdm-adv{margin-bottom:10px;}
-        .wdm-check{display:flex;align-items:center;gap:6px;font-size:12px;color:#aaa;
-          cursor:pointer;margin-bottom:8px;user-select:none;}
-        .wdm-check input{accent-color:#6366f1;}
-        .wdm-adv input[type=text]{width:100%;box-sizing:border-box;padding:7px 10px;
-          border-radius:8px;border:1px solid rgba(255,255,255,0.15);
-          background:rgba(255,255,255,0.06);color:#fff;font-size:11px;outline:none;
-          font-family:inherit;}
-        .wdm-adv input[type=text]:focus{border-color:#6366f1;}
-      </style>
-      <div class="wdm-panel-title">
-        🎬 弹幕管理姬
-        <button class="wdm-panel-close" id="wdm-panel-close">&times;</button>
-      </div>
-      <div class="wdm-panel-body">
-        <div class="wdm-input-row">
-          <input type="text" id="wdm-bvid-input" placeholder="输入B站视频链接或BV号" autofocus>
-          <button class="wdm-btn-primary" id="wdm-crawl-btn">提取弹幕</button>
-        </div>
-        <div class="wdm-adv">
-          <label class="wdm-check"><input type="checkbox" id="wdm-history"> 完整模式（含历史弹幕，弹幕更全）</label>
-          <input type="text" id="wdm-cookie-input" placeholder="SESSDATA Cookie（可选，完整模式/被风控时需要）">
-        </div>
-        <div class="wdm-status" id="wdm-panel-status"></div>
-        <div id="wdm-sets-list"></div>
-      </div>
-    `;
-    document.body.appendChild(panel);
+  async function ensureDanmakuPanelUI() {
+    if (window.__WUJI_PANEL__) return true;
+    try {
+      const resp = await chrome.runtime.sendMessage({ type: 'INJECT_PANEL_UI' });
+      if (resp?.success && window.__WUJI_PANEL__) return true;
+      console.warn('[无极] 弹幕面板 UI 注入失败:', resp?.error);
+    } catch (e) {
+      console.warn('[无极] 弹幕面板 UI 注入请求失败:', e.message);
+    }
+    return false;
+  }
 
-    // 事件
-    panel.querySelector('#wdm-panel-close').addEventListener('click', () => { panel.style.display = 'none'; });
-    panel.querySelector('#wdm-crawl-btn').addEventListener('click', async () => {
-      const input = panel.querySelector('#wdm-bvid-input');
-      const bvid = input.value.trim();
-      if (!bvid) return;
-      const btn = panel.querySelector('#wdm-crawl-btn');
-      const status = panel.querySelector('#wdm-panel-status');
-      const useHistory = panel.querySelector('#wdm-history').checked;
-      const cookie = panel.querySelector('#wdm-cookie-input').value.trim();
-      btn.disabled = true;
-      btn.textContent = '提取中...';
-      status.textContent = useHistory
-        ? '⏳ 完整模式：正在抓取实时 + 历史弹幕，可能需要较长时间...'
-        : '⏳ 正在连接B站API获取弹幕...';
+  // 抓取（轮询与超时留在引擎侧，Vue 只等结果；30 次 × 1s 与原实现一致）
+  function crawlDanmaku(bvid, useHistory, cookie) {
+    return new Promise((resolve) => {
       chrome.runtime.sendMessage({ type: 'DANMAKU_CRAWL', bvid, useHistory, cookie }, (resp) => {
-        if (resp?.success) {
-          status.textContent = '⏳ 弹幕提取中，完成后将自动加载...';
-          // 轮询检查弹幕是否已加载，最多等30秒
-          let attempts = 0;
-          const check = setInterval(() => {
-            attempts++;
-            chrome.runtime.sendMessage({ type: 'DANMAKU_GET_ACTIVE' }, (r) => {
-              if (r?.success && r.data && r.data.bvid) {
-                clearInterval(check);
-                const set = r.data;
-                status.textContent = `✅ 已提取 ${set.count} 条弹幕，来自：${set.title.substring(0, 30)}`;
-                btn.disabled = false;
-                btn.textContent = '提取弹幕';
-                input.value = '';
-                refreshList();
-              } else if (attempts > 30) {
-                clearInterval(check);
-                status.textContent = '⚠️ 提取超时，请检查BV号是否正确';
-                btn.disabled = false;
-                btn.textContent = '提取弹幕';
-              }
-            });
-          }, 1000);
-        } else {
-          status.textContent = '❌ ' + (resp?.error || '提取失败，请检查BV号或网络');
-          btn.disabled = false;
-          btn.textContent = '提取弹幕';
-        }
-      });
-    });
-
-    function refreshList() {
-      chrome.runtime.sendMessage({ type: 'DANMAKU_LIST' }, (resp) => {
-        const listEl = panel.querySelector('#wdm-sets-list');
-        if (!resp?.success || !resp.data || resp.data.length === 0) {
-          listEl.innerHTML = '<div class="wdm-status">暂无保存的弹幕</div>';
+        if (chrome.runtime.lastError || !resp?.success) {
+          resolve({ ok: false, error: resp?.error || '提取失败，请检查BV号或网络' });
           return;
         }
-        listEl.innerHTML = resp.data.map(set => `
-          <div class="wdm-set-item">
-            <div class="wdm-set-info">
-              <div class="wdm-set-title">${escHtml(set.title)}</div>
-              <div class="wdm-set-meta">${set.count}条 · ${new Date(set.createdAt).toLocaleDateString('zh-CN')}</div>
-            </div>
-            <div class="wdm-set-actions">
-              <button class="wdm-btn-sm wdm-btn-danger" data-bvid="${set.bvid}" data-action="delete">删除</button>
-            </div>
-          </div>
-        `).join('');
-
-        listEl.querySelectorAll('[data-action="delete"]').forEach(btn => {
-          btn.addEventListener('click', () => {
-            if (confirm('确定删除此弹幕集？')) {
-              chrome.runtime.sendMessage({ type: 'DANMAKU_DELETE', bvid: btn.dataset.bvid }, () => refreshList());
+        let attempts = 0;
+        const check = setInterval(() => {
+          attempts++;
+          chrome.runtime.sendMessage({ type: 'DANMAKU_GET_ACTIVE' }, (r) => {
+            if (r?.success && r.data && r.data.bvid) {
+              clearInterval(check);
+              resolve({ ok: true, count: r.data.count, title: r.data.title });
+            } else if (attempts > 30) {
+              clearInterval(check);
+              resolve({ ok: false, error: '提取超时，请检查BV号是否正确' });
             }
           });
+        }, 1000);
+      });
+    });
+  }
+
+  const danmakuBridge = {
+    async crawl(bvid, useHistory, cookie) { return crawlDanmaku(bvid, useHistory, cookie); },
+    async getSets() {
+      return new Promise((resolve) => {
+        chrome.runtime.sendMessage({ type: 'DANMAKU_LIST' }, (resp) => {
+          resolve(resp?.success ? (resp.data || []) : []);
         });
       });
-    }
+    },
+    async deleteSet(bvid) {
+      return new Promise((resolve) => {
+        chrome.runtime.sendMessage({ type: 'DANMAKU_DELETE', bvid }, () => resolve(true));
+      });
+    },
+    close() { unmountDanmakuPanel(); },
+  };
 
-    refreshList();
+  async function showDanmakuPanel() {
+    if (danmakuPanelApi) return;   // 已挂载：幂等复用
+    if (!(await ensureDanmakuPanelUI())) return;
+    const hostEl = document.createElement('div');
+    hostEl.id = 'wuji-danmaku-host';
+    hostEl.setAttribute('data-ai-browser', 'danmaku-panel');
+    hostEl.style.cssText = 'position:fixed;inset:0;z-index:2147483647;pointer-events:none;';
+    document.body.appendChild(hostEl);
+    const shadow = hostEl.attachShadow({ mode: 'open' });
+    danmakuPanelApi = window.__WUJI_PANEL__.mountDanmaku({ shadowRoot: shadow, host: hostEl, bridge: danmakuBridge });
+  }
+
+  function unmountDanmakuPanel() {
+    danmakuPanelApi = null;
+    if (window.__WUJI_PANEL__) { try { window.__WUJI_PANEL__.unmountDanmaku(); } catch (e) { /* ignore */ } }
+    const hostEl = document.getElementById('wuji-danmaku-host');
+    if (hostEl) hostEl.remove();
   }
 
   function escHtml(str) {
