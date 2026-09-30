@@ -51,14 +51,51 @@ export function renderMarkdown(text) {
 
 /**
  * 从流式文本中剥离工具调用 JSON 及其 markdown 代码块包裹。
- * content.js:1030-1043 原样。多轮工具调用下，第一轮的 {"tool":...}
- * 不应显示在最终答案里；保留 > 🔧 工具状态行（blockquote）和正常文本。
+ * 多轮工具调用下，第一轮的 {"tool":...} 不应显示在最终答案里。
+ * 保留 > 🔧 工具状态行（blockquote）和正常文本。
+ *
+ * v3.7.1 修复：原正则 \{"tool"...[\s\S]*?\}\s*\} 懒匹配到"第一个 }}",
+ * 当 params 里是含花括号的 JS 代码（如 console_eval 的表达式）时会提前
+ * 截断，尾部残片（如 `)(Date.now())"}}`）漏进正文。改为花括号配对扫描：
+ * 正确处理嵌套对象与字符串内的引号/转义。
  */
+
+// 花括号配对扫描：返回 s 中所有顶层 {"tool"...} 片段被移除后的文本；
+// 未闭合的 {"tool" 连同其后内容一并隐藏（流式期间工具 JSON 尚未收完时不应露出）
+function stripToolJsonSpans(s) {
+  let result = '';
+  let i = 0;
+  while (i < s.length) {
+    const start = s.indexOf('{"tool"', i);
+    if (start < 0) { result += s.slice(i); break; }
+    result += s.slice(i, start);
+    let depth = 0, k = start, inStr = false, esc = false, end = -1;
+    for (; k < s.length; k++) {
+      const c = s[k];
+      if (inStr) {
+        if (esc) esc = false;
+        else if (c === '\\') esc = true;
+        else if (c === '"') inStr = false;
+      } else if (c === '"') {
+        inStr = true;
+      } else if (c === '{') {
+        depth++;
+      } else if (c === '}') {
+        depth--;
+        if (depth === 0) { end = k + 1; break; }
+      }
+    }
+    if (end < 0) break;   // 未闭合：隐藏剩余（闭合后由下一轮 delta 完整剥离）
+    i = end;
+  }
+  return result;
+}
+
 export function cleanToolCallsFromText(text) {
   // 1. 剥离包裹工具 JSON 的 markdown 代码块：```json\n{...}\n``` 或 ```\n{...}\n```
-  let out = text.replace(/```(?:json)?\s*\n?\s*(\{"tool"[\s\S]*?\})\s*\n?\s*```/g, '');
-  // 2. 剥离裸露的工具调用 JSON
-  out = out.replace(/\{"tool"\s*:\s*"\w+"\s*,\s*"params"\s*:\s*\{[\s\S]*?\}\s*\}/g, '');
+  let out = text.replace(/```(?:json)?\s*\n?\s*\{"tool"[\s\S]*?\n?\s*```/g, '');
+  // 2. 剥离裸露的工具调用 JSON（花括号配对扫描，兼容 params 内含嵌套花括号）
+  out = stripToolJsonSpans(out);
   // 3. 清理多余空行
   out = out.replace(/\n{3,}/g, '\n\n').trim();
   return out || text; // 若清理后为空（极端情况），返回原文

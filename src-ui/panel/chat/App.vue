@@ -72,6 +72,8 @@ export default {
     themeIcon() { return (THEME_ICONS[this.theme] || THEME_ICONS.auto)(); },
     themeLabel() { return THEME_LABELS[this.theme] || THEME_LABELS.auto; },
     revealedText() { return this.streamText.slice(0, this.revealed); },
+    // 流式期间同样剥离工具调用 JSON（原实现每帧清理；未闭合的 JSON 连同其后内容先隐藏）
+    revealedDisplay() { return cleanToolCallsFromText(this.revealedText); },
     showEmpty() { return !this.messages.length && !this.streaming; },
     suggestions() { return SUGGESTIONS; },
   },
@@ -161,6 +163,8 @@ export default {
     // 消息与状态（content.js:768-859 对应功能的响应式移植）
     // ============================================================
     now() { return new Date().toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' }); },
+    // 存储契约用 assistant，样式沿用原实现的 ai（.msg-row.ai / .ai-block）
+    rowClass(role) { return role === 'assistant' ? 'ai' : role; },
     addMessage(msg) {
       const m = { id: nextMsgId++, time: this.now(), ...msg };
       if (m.role === 'assistant' && !m.html) m.html = renderMarkdown(m.content || '');
@@ -437,10 +441,10 @@ export default {
         </div>
       </div>
 
-      <div v-for="m in messages" :key="m.id" class="msg-row" :class="m.role">
+      <div v-for="m in messages" :key="m.id" class="msg-row" :class="rowClass(m.role)">
         <div v-if="m.role !== 'system'" class="msg-avatar" :class="m.role === 'user' ? 'user-avatar' : 'ai-avatar'"
           v-html="m.role === 'user' ? ICO.user : ICO.ai"></div>
-        <div class="bubble-block" :class="m.role + '-block'">
+        <div class="bubble-block" :class="rowClass(m.role) + '-block'">
           <div v-if="m.role === 'assistant'" class="msg-bubble md" v-html="m.html"></div>
           <div v-else-if="m.html" class="msg-bubble" v-html="m.html"></div>
           <div v-else class="msg-bubble" :style="m.pre ? 'white-space:pre-wrap;font-size:12px;text-align:left;' : ''">{{ m.content }}</div>
@@ -453,7 +457,7 @@ export default {
         <div class="msg-avatar ai-avatar" v-html="ICO.ai"></div>
         <div class="bubble-block ai-block">
           <div v-if="!streamText" class="typing-dots"><span></span><span></span><span></span></div>
-          <div v-else class="msg-bubble stream-active">{{ revealedText }}<span class="stream-cursor"></span></div>
+          <div v-else class="msg-bubble stream-active">{{ revealedDisplay }}<span class="stream-cursor"></span></div>
         </div>
       </div>
     </div>

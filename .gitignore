@@ -24,3 +24,4 @@ node_modules/
 
 # ZCode 会话工作区
 .zcode/
+.zcodeignore
