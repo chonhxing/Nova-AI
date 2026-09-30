@@ -370,3 +370,48 @@ export const DANMAKU_STYLES = `
   .wdm-set-meta { font-size: 11px; color: #888; margin-top: 2px; }
   .wdm-set-actions { display: flex; gap: 6px; flex-shrink: 0; }
 `;
+
+// B站视频下载面板样式（与弹幕面板同一定位：深色悬浮面板）
+export const BILI_STYLES = `
+  :host { all: initial; font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", "Microsoft YaHei", sans-serif; -webkit-font-smoothing: antialiased; }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  .bili-panel {
+    position: fixed; top: 50%; left: 50%; transform: translate(-50%,-50%);
+    pointer-events: auto; /* 宿主 pointer-events:none（不挡页面点击），面板自身可交互 */
+    z-index: 2147483647; width: 440px; max-height: 76vh; background: rgba(0,0,0,0.92);
+    border-radius: 16px; color: #e0e0e0; display: flex; flex-direction: column;
+    font-size: 13px; box-shadow: 0 8px 40px rgba(0,0,0,0.5);
+    border: 1px solid rgba(255,255,255,0.1); overflow: hidden;
+    animation: biliIn 0.28s cubic-bezier(0.16,1,0.3,1);
+  }
+  @keyframes biliIn { 0% { opacity: 0; transform: translate(-50%,-50%) scale(0.96); } 100% { opacity: 1; transform: translate(-50%,-50%) scale(1); } }
+  .bili-head { display: flex; align-items: center; justify-content: space-between; padding: 14px 18px; border-bottom: 1px solid rgba(255,255,255,0.1); font-size: 15px; font-weight: 600; flex-shrink: 0; }
+  .bili-close { cursor: pointer; opacity: 0.6; font-size: 18px; line-height: 1; background: none; border: none; color: #fff; padding: 0 4px; }
+  .bili-close:hover { opacity: 1; }
+  .bili-body { padding: 14px 18px 16px; overflow-y: auto; flex: 1; }
+  .bili-status { text-align: center; color: #888; font-size: 12px; padding: 14px 0; white-space: pre-wrap; }
+  .bili-error { color: #f87171; }
+  .bili-meta { margin-bottom: 10px; }
+  .bili-vtitle { font-size: 14px; font-weight: 600; line-height: 1.5; }
+  .bili-sub { font-size: 11px; color: #888; margin-top: 3px; }
+  .bili-pages { display: flex; gap: 6px; flex-wrap: wrap; margin: 8px 0 6px; }
+  .bili-page-chip { padding: 4px 12px; border-radius: 14px; border: 1px solid rgba(255,255,255,0.14); background: rgba(255,255,255,0.06); color: #aaa; font-size: 11px; cursor: pointer; font-family: inherit; transition: all 0.15s; }
+  .bili-page-chip:hover { border-color: #6366f1; color: #c7d2fe; }
+  .bili-page-chip.active { background: rgba(99,102,241,0.3); border-color: #6366f1; color: #c7d2fe; font-weight: 600; }
+  .bili-part-name { font-size: 11px; color: #888; margin-bottom: 8px; }
+  .bili-sec { font-size: 11px; color: #888; padding: 10px 0 4px; border-top: 1px solid rgba(255,255,255,0.06); margin-top: 10px; }
+  .bili-row { display: flex; align-items: center; justify-content: space-between; padding: 8px 0; border-bottom: 1px solid rgba(255,255,255,0.05); }
+  .bili-row-info { flex: 1; min-width: 0; }
+  .bili-row-name { font-weight: 500; }
+  .bili-codec { font-size: 10px; color: #818cf8; margin-left: 8px; }
+  .bili-row-meta { font-size: 11px; color: #888; margin-top: 2px; }
+  .bili-dl { padding: 5px 14px; border-radius: 6px; border: none; cursor: pointer; font-size: 11px; font-family: inherit; background: linear-gradient(135deg, #6366f1, #a855f7); color: #fff; flex-shrink: 0; transition: opacity 0.15s; }
+  .bili-dl:hover { opacity: 0.88; }
+  .bili-dl-row { display: flex; align-items: center; gap: 8px; padding: 5px 0; border-bottom: 1px solid rgba(255,255,255,0.04); }
+  .bili-dl-name { flex: 1; min-width: 0; font-size: 11px; color: #aaa; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .bili-dl-state { font-size: 11px; flex-shrink: 0; color: #888; }
+  .bili-dl-state.done { color: #34d399; }
+  .bili-dl-state.error { color: #f87171; }
+  .bili-hint { margin-top: 12px; padding: 9px 12px; border-radius: 8px; background: rgba(99,102,241,0.1); font-size: 11px; color: #9ca3af; line-height: 1.7; }
+  .bili-hint code { background: rgba(255,255,255,0.08); padding: 1px 6px; border-radius: 4px; font-size: 10px; color: #a5b4fc; }
+`;

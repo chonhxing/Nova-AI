@@ -12,10 +12,11 @@
 import { createApp } from 'vue';
 import ChatApp from './chat/App.vue';
 import DanmakuApp from './danmaku/App.vue';
-import { CHAT_STYLES, DANMAKU_STYLES } from './styles.js';
+import BiliApp from './bili/App.vue';
+import { CHAT_STYLES, DANMAKU_STYLES, BILI_STYLES } from './styles.js';
 
 // 跨注入持久的状态仓：重复注入时复用，防止双重挂载
-const state = (window.__WUJI_PANEL_STATE__ = window.__WUJI_PANEL_STATE__ || { chat: null, danmaku: null });
+const state = (window.__WUJI_PANEL_STATE__ = window.__WUJI_PANEL_STATE__ || { chat: null, danmaku: null, bili: null });
 
 function adoptStyles(shadowRoot, css) {
   try {
@@ -76,4 +77,28 @@ export function unmountDanmaku() {
   try { c.app.unmount(); } catch (e) { /* ignore */ }
   if (c.mountEl) c.mountEl.remove();
   state.danmaku = null;
+}
+
+// ============================================================
+// B站视频下载面板（业务桥由 bili-entry.js 提供：getBvid/getPage/send/close）
+// ============================================================
+export function mountBili({ shadowRoot, host, bridge }) {
+  if (state.bili) return state.bili.api;
+  adoptStyles(shadowRoot, BILI_STYLES);
+  const mountEl = document.createElement('div');
+  shadowRoot.appendChild(mountEl);
+  const app = createApp(BiliApp);
+  app.provide('bridge', bridge);
+  app.provide('host', host);
+  const api = app.mount(mountEl);
+  state.bili = { app, mountEl };
+  return api;
+}
+
+export function unmountBili() {
+  const c = state.bili;
+  if (!c) return;
+  try { c.app.unmount(); } catch (e) { /* ignore */ }
+  if (c.mountEl) c.mountEl.remove();
+  state.bili = null;
 }

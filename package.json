@@ -1,7 +1,7 @@
 {
   "name": "wuji-extension",
   "private": true,
-  "version": "3.7.0",
+  "version": "3.8.0",
   "type": "module",
   "description": "无极 — 网页翻译、AI 对话、知识库、广告过滤 Chrome 扩展（UI 构建工程）",
   "scripts": {

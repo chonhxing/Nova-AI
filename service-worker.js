@@ -10,7 +10,8 @@ try {
     'libs/kb-core.js',
     'libs/kb-agent.js',
     'libs/tab-suspender.js',
-    'libs/danmaku-crawler.js'
+    'libs/danmaku-crawler.js',
+    'libs/bili-downloader.js'
   );
   // 预加载 WASM 内核（失败自动降级 JS 兜底，不阻塞启动）
   if (typeof WasmKernels !== 'undefined' && WasmKernels.init) WasmKernels.init();
@@ -258,6 +259,12 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.type === 'INJECT_DANMAKU_UI') { handleInjectDanmakuUI(message, sender, sendResponse); return true; }
   if (message.type === 'OPEN_DANMAKU_PANEL') { handleOpenDanmakuPanel(sender, sendResponse); return true; }
 
+  // ======== B 站视频下载（引擎：libs/bili-downloader.js，算法移植自 Bili23）========
+  if (message.type === 'BILI_GET_INFO' && message.payload) { handleBiliGetInfo(message, sender, sendResponse); return true; }
+  if (message.type === 'BILI_RESOLVE' && message.payload) { handleBiliResolve(message, sender, sendResponse); return true; }
+  if (message.type === 'BILI_DOWNLOAD' && message.payload) { handleBiliDownload(message, sender, sendResponse); return true; }
+  if (message.type === 'BILI_OPEN_PANEL') { handleBiliOpenPanel(sender, sendResponse); return true; }
+
   return false;
 });
 
@@ -316,6 +323,44 @@ async function handleOpenDanmakuPanel(sender, sendResponse) {
     await chrome.scripting.executeScript({ target: { tabId }, files: ['libs/danmaku-player.js', 'ui/panel-ui.js'] });
     danmakuInjectedTabs.add(tabId);
     chrome.tabs.sendMessage(tabId, { type: 'OPEN_DANMAKU_PANEL' }, () => void chrome.runtime.lastError);
+    sendResponse({ success: true });
+  } catch (e) { sendResponse({ success: false, error: e.message }); }
+}
+
+// ============================================================
+// B 站视频下载（引擎：libs/bili-downloader.js；WBI 签名/playurl 算法移植自
+// 开源项目 Bili23-Downloader。Cookie 随 credentials:'include' 自动附带，
+// Referer 由 declarativeNetRequest 会话规则对扩展发起的第三方请求注入）
+// ============================================================
+async function handleBiliGetInfo(message, sender, sendResponse) {
+  try { sendResponse({ success: true, data: await BiliDownloader.getVideoInfo(message.payload?.bvid || '') }); }
+  catch (e) { sendResponse({ success: false, error: e.message }); }
+}
+
+async function handleBiliResolve(message, sender, sendResponse) {
+  try { sendResponse({ success: true, data: await BiliDownloader.resolveStreams(message.payload || {}) }); }
+  catch (e) { sendResponse({ success: false, error: e.message }); }
+}
+
+async function handleBiliDownload(message, sender, sendResponse) {
+  try {
+    const { url, filename } = message.payload || {};
+    if (!url) { sendResponse({ success: false, error: '缺少下载地址' }); return; }
+    sendResponse({ success: true, data: await BiliDownloader.download(url, filename) });
+  } catch (e) { sendResponse({ success: false, error: e.message }); }
+}
+
+// 面板中继：B站视频页悬浮入口发 runtime 消息，SW 注入面板 UI 后转发
+async function handleBiliOpenPanel(sender, sendResponse) {
+  try {
+    let tabId = sender.tab?.id;
+    if (!tabId) {
+      const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+      tabId = tab?.id;
+    }
+    if (!tabId) { sendResponse({ success: false, error: '无法确定目标标签页' }); return; }
+    await chrome.scripting.executeScript({ target: { tabId }, files: ['ui/panel-ui.js'] });
+    chrome.tabs.sendMessage(tabId, { type: 'BILI_OPEN_PANEL' }, () => void chrome.runtime.lastError);
     sendResponse({ success: true });
   } catch (e) { sendResponse({ success: false, error: e.message }); }
 }

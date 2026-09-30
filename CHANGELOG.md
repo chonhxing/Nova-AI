@@ -1,5 +1,18 @@
 # 更新日志
 
+## v3.8.0（2026-09-30）
+
+### B站视频下载（算法移植自开源项目 Bili23-Downloader）
+
+- **视频页一键下载**：B站视频页右下角新增悬浮"下载视频"按钮（仅 bilibili.com 注入，SPA 路由轮询显隐），点击打开下载面板——视频标题/UP主/分P 列表、清晰度列表（含编码、分辨率、体积估算）、音频轨列表（192K/132K/64K，自动识别 Hi-Res 与杜比全景声）、下载队列状态（进行中/完成/失败）
+- **WBI 签名移植**：从 nav 接口取 img/sub key，mixinKeyEncTab 混淆重排取前 32 位，参数加 `wts` 秒级时间戳→按键排序→值过滤 `!'()*`→form 编码→`md5(query+mixinKey)` 得 `w_rid`。已对照真实 B 站接口验证（view/playurl 均通过，签名错误会返回 -403）；nav 偶发风控按 Bili23 策略重试（3 次、间隔 2s）
+- **登录清晰度随浏览器账号**：接口请求带 `credentials:'include'`，扩展 host 权限下自动附带用户 B 站登录 Cookie（SESSDATA）——大会员自动解锁 1080P+/4K/HDR 等高档位，无需像 Bili23 手动填 Cookie；首次以 `qn=127` 探测账号权限上限
+- **DASH 取流与 CDN 择优**：`fnval=4048`（DASH+4K+杜比+8K+AV1），baseUrl+backupUrl 合并后按黑名单主机过滤（mcdn/pcdn P2P 变体、szbdyd 等，移植自 Bili23 cdn.py）优先正规线路——实测默认首选会被分到 mcdn 主机
+- **直链下载**：`chrome.downloads` 直链 + Referer 注入双保险（downloads API 的 `headers` 参数为主，declarativeNetRequest 会话规则对扩展发起的第三方请求兜底）——实测正规 upos CDN 无 Referer 返回 403、带则 206。文件存入"无极下载/"子目录，按 Windows 非法字符集按路径段清洗（保留目录分隔符）
+- **引擎与 UI 分层**：引擎在 Service Worker（`libs/bili-downloader.js`，无 UI 依赖），面板 UI 在懒注入 IIFE 包内（`src-ui/panel/bili/App.vue`），中间经 BILI_GET_INFO/RESOLVE/DOWNLOAD 消息；入口脚本（`libs/bili-entry.js`）仅注入 B站，负责悬浮按钮与面板挂载
+- **音视频为独立 DASH 流**：下载得 视频.m4s + 音频.m4a，面板内置 ffmpeg 合并命令提示（`-c copy` 无损封装）；弹幕/字幕导出与音视频自动合并留待后续版本
+- v3.7.0 与 v3.7.1（面板图标补齐、AI 气泡卡片样式修复、工具调用 JSON 泄漏修复）已推送 GitHub；本版本按约定仅本地提交不推送
+
 ## v3.7.0（2026-09-29）
 
 ### UI 全面拥抱 Vue 3：聊天面板 / 弹幕管理姬重写 + 懒注入架构
