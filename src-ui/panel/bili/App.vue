@@ -36,8 +36,10 @@ export default {
       pageIndex: 0,        // 当前分P索引
       res: null,           // resolve 结果 { qualities, audios, timelength }
       resolving: false,
-      downloads: [],       // { key, name, state: 'running'|'done'|'error', received }
+      downloads: [],       // { key, id, name, state, received, total, retried, urls, label, kind, error, startedAt }
+      now: Date.now(),     // 心跳：驱动"进行中"项的速度/耗时刷新
       _dlListeners: [],
+      _ticker: null,
     };
   },
   computed: {
@@ -65,11 +67,14 @@ export default {
       chrome.runtime.onMessage.addListener(on);
       this._dlListeners.push([chrome.runtime.onMessage, on]);
     }
+    // 每秒心跳：驱动进行中项的速度/耗时刷新（Vue 响应式）
+    this._ticker = setInterval(() => { this.now = Date.now(); }, 1000);
     await this.load();
   },
   beforeUnmount() {
     for (const [ev, fn] of this._dlListeners) { try { ev.removeListener(fn); } catch (e) { /* ignore */ } }
     this._dlListeners = [];
+    if (this._ticker) { clearInterval(this._ticker); this._ticker = null; }
   },
   methods: {
     fmtSize, fmtDur,
@@ -114,14 +119,16 @@ export default {
       if (this.resolving || this.processing) return;
       const v = this.res?.videos.find(x => x.id === q.id);
       if (!v?.url) return;
-      this.download([v.url, ...v.backups], this.qnName(q.id), 'video');
+      const expected = Math.round(v.size || (v.bandwidth || 0) * (this.res.timelength || 0) / 8000) || 0;
+      this.download([v.url, ...v.backups], this.qnName(q.id), 'video', expected);
     },
     dlAudio(a) {
       const s = this.res?.audios.find(x => x.id === a.id);
       if (!s?.url) return;
-      this.download([s.url, ...s.backups], this.audioName(a.id), 'audio');
+      const expected = Math.round((s.bandwidth || 0) * (this.res.timelength || 0) / 8000) || 0;
+      this.download([s.url, ...s.backups], this.audioName(a.id), 'audio', expected);
     },
-    async download(urls, qualityLabel, kind, item = null) {
+    async download(urls, qualityLabel, kind, expectedSize = 0, item = null) {
       const page = this.currentPage;
       if (!urls?.length || !this.info) return;
       if (!item) {
@@ -129,11 +136,16 @@ export default {
         const name = kind === 'audio'
           ? `${base} [${qualityLabel}] 音频流.m4a`
           : `${base} [${qualityLabel}] 视频流.m4s`;
-        item = { key: name + Date.now(), id: null, name, state: 'running', received: 0, total: 0, retried: false, urls, label: qualityLabel, kind, error: '' };
+        item = {
+          key: name + Date.now(), id: null, name, state: 'running',
+          received: 0, total: expectedSize, retried: false,
+          urls, label: qualityLabel, kind, error: '', startedAt: Date.now(),
+        };
         this.downloads.unshift(item);
       } else {
         item.state = 'running';
         item.error = '';
+        item.startedAt = Date.now();
       }
       try {
         const r = await this.bridge.send('BILI_DOWNLOAD', { urls: item.urls, filename: item.name, key: item.key });
@@ -148,11 +160,21 @@ export default {
     retry(item, manual = false) {
       if (!manual && item.retried) return;
       item.retried = true;
-      this.download(item.url, item.label, item.kind, item);
+      this.download(item.urls, item.label, item.kind, item.total, item);
     },
     percent(d) {
       if (!d.total || d.state !== 'running') return null;
       return Math.min(100, Math.round((d.received / d.total) * 100));
+    },
+    // 进行中项的状态文案：百分比 / 已下载 / 速度（心跳驱动，永不显成"卡住"）
+    runningText(d) {
+      const bits = [];
+      const p = this.percent(d);
+      if (p !== null) bits.push(p + '%');
+      if (d.received > 0) bits.push(this.fmtSize(d.received));
+      const elapsed = (this.now - d.startedAt) / 1000;
+      if (elapsed >= 2 && d.received > 0) bits.push(this.fmtSize(d.received / elapsed) + '/s');
+      return bits.length ? bits.join(' · ') : '连接中…';
     },
     sanitize(name) {
       return String(name || '').replace(/[<>:"/\\|?*\x00-\x1f]/g, '_').replace(/^[\s.]+|[\s.]+$/g, '').trim() || '_';
@@ -221,7 +243,7 @@ export default {
                 <div v-if="percent(d) !== null" class="bili-bar"><div class="bili-bar-in" :style="{ width: percent(d) + '%' }"></div></div>
               </div>
               <span class="bili-dl-state" :class="d.state">
-                {{ d.state === 'done' ? '✓ 完成' : d.state === 'error' ? (d.retried ? '✗ 失败' : '重试中…') : (percent(d) !== null ? percent(d) + '%' : (d.received ? fmtSize(d.received) : '进行中')) }}
+                {{ d.state === 'done' ? '✓ 完成' : d.state === 'error' ? (d.retried ? '✗ 失败' : '重试中…') : runningText(d) }}
               </span>
               <button v-if="d.state === 'error'" class="bili-dl bili-dl-retry" @click="retry(d, true)">重试</button>
             </div>
