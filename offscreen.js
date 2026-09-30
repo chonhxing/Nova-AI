@@ -19,19 +19,23 @@
 // key → { writable, tempName, root, filename, queue }
 const streams = new Map();
 
-chrome.runtime.onMessage.addListener((msg) => {
+chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (msg?.target !== 'offscreen') return false;
+  // 面板以 callback 式 sendMessage 直发：必须同步应答，否则端口关闭被当作失败
   if (msg.type === 'BILI_DL_START') {
     startStream(msg.key, msg.filename).catch((e) => report(msg.key, { ok: false, error: e.message }));
+    sendResponse({ ok: true });
   } else if (msg.type === 'BILI_DL_CHUNK') {
     const s = streams.get(msg.key);
     if (s) {
       // 按到达顺序串行写入（OPFS 写入远快于网络，无需背压）
       s.queue = s.queue.then(() => s.writable.write(new Uint8Array(msg.chunk))).catch((e) => report(msg.key, { ok: false, error: e.message }));
     }
+    sendResponse({ ok: true });
   } else if (msg.type === 'BILI_DL_END') {
     const s = streams.get(msg.key);
     if (s) finishStream(msg.key, s).catch((e) => report(msg.key, { ok: false, error: e.message }));
+    sendResponse({ ok: true });
   } else if (msg.type === 'BILI_DL_ABORT') {
     const s = streams.get(msg.key);
     if (s) {
@@ -41,6 +45,7 @@ chrome.runtime.onMessage.addListener((msg) => {
         await cleanup(s.tempName);
       }).catch(() => {});
     }
+    sendResponse({ ok: true });
   }
   return false;
 });

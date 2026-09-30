@@ -263,6 +263,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.type === 'BILI_GET_INFO' && message.payload) { handleBiliGetInfo(message, sender, sendResponse); return true; }
   if (message.type === 'BILI_RESOLVE' && message.payload) { handleBiliResolve(message, sender, sendResponse); return true; }
   if (message.type === 'BILI_OPEN_PANEL') { handleBiliOpenPanel(sender, sendResponse); return true; }
+  if (message.type === 'BILI_DL_START' && message.payload) { handleBiliDlStart(message, sendResponse); return true; }
 
   return false;
 });
@@ -354,6 +355,28 @@ async function handleBiliOpenPanel(sender, sendResponse) {
     chrome.tabs.sendMessage(tabId, { type: 'BILI_OPEN_PANEL' }, () => void chrome.runtime.lastError);
     sendResponse({ success: true });
   } catch (e) { sendResponse({ success: false, error: e.message }); }
+}
+
+// 面板流式下载的第一跳：确保 offscreen 落盘文档存在后转发 START
+// （缺失时面板的 CHUNK/END 会被静默吞掉——上一版卡 100% 无文件正是这个原因）
+async function handleBiliDlStart(message, sendResponse) {
+  try {
+    const { key, filename } = message.payload || {};
+    if (!key || !filename) { sendResponse({ success: false, error: '参数缺失' }); return; }
+    await ensureBiliOffscreen();
+    await chrome.runtime.sendMessage({ target: 'offscreen', type: 'BILI_DL_START', key, filename });
+    sendResponse({ success: true });
+  } catch (e) { sendResponse({ success: false, error: e.message }); }
+}
+
+async function ensureBiliOffscreen() {
+  const ctx = await chrome.runtime.getContexts({ contextTypes: ['OFFSCREEN_DOCUMENT'] });
+  if (ctx.length) return;
+  await chrome.offscreen.createDocument({
+    url: 'offscreen.html',
+    reasons: ['BLOBS'],
+    justification: 'B站视频下载落盘：分块写入 OPFS 后经 chrome.downloads 保存'
+  });
 }
 
 // ======== 各个消息处理器 ========

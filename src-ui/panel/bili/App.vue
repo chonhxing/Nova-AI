@@ -175,10 +175,16 @@ export default {
       const resp = await fetch(url, { credentials: 'omit' });
       if (!resp.ok) throw new Error('CDN HTTP ' + resp.status);
       if (resp.headers.get('content-length')) item.total = Number(resp.headers.get('content-length'));
-      const send = (type, extra) => chrome.runtime.sendMessage({ target: 'offscreen', type, key: item.key, ...extra }).catch(() => {});
-      await send('BILI_DL_START', { filename: item.name });
+      // 第一跳经 SW：确保 offscreen 落盘文档存在（创建失败在这里抛错，不再静默吞数据）
+      await this.bridge.send('BILI_DL_START', { key: item.key, filename: item.name });
+      const direct = (type, extra) => new Promise((resolve, reject) => {
+        chrome.runtime.sendMessage({ target: 'offscreen', type, key: item.key, ...extra }, (r) => {
+          const err = chrome.runtime.lastError;
+          if (err) reject(new Error(err.message)); else resolve(r);
+        });
+      });
       const reader = resp.body.getReader();
-      let received = 0, batch = [], batchLen = 0, lastB = 0, lastT = Date.now();
+      let received = 0, batch = [], batchLen = 0, lastB = 0, lastT = Date.now(), miss = 0;
       while (true) {
         const { done, value } = await reader.read();
         if (done) break;
@@ -190,7 +196,8 @@ export default {
           const buf = new Uint8Array(batchLen);
           let off = 0;
           for (const b of batch) { buf.set(b, off); off += b.length; }
-          await send('BILI_DL_CHUNK', { chunk: buf.buffer, received });
+          try { await direct('BILI_DL_CHUNK', { chunk: buf.buffer, received }); miss = 0; }
+          catch (e) { if (++miss >= 3) throw new Error('落盘通道中断: ' + e.message); }
           batch = []; batchLen = 0;
         }
         if (received - lastB >= 1048576 || Date.now() - lastT >= 500) { lastB = received; lastT = Date.now(); }
@@ -199,9 +206,9 @@ export default {
         const buf = new Uint8Array(batchLen);
         let off = 0;
         for (const b of batch) { buf.set(b, off); off += b.length; }
-        await send('BILI_DL_CHUNK', { chunk: buf.buffer, received });
+        await direct('BILI_DL_CHUNK', { chunk: buf.buffer, received });
       }
-      await send('BILI_DL_END', { filename: item.name });
+      await direct('BILI_DL_END', { filename: item.name });   // 送达失败会在这里抛出（不再卡 100%）
     },
     // 自动重试一次；手动按钮可无限重试（重新走一次 downloads 任务，URL 未过期）
     retry(item, manual = false) {
