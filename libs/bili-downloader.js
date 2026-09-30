@@ -215,7 +215,8 @@
   }
 
   // ============================================================
-  // 下载（chrome.downloads 直链 + Referer 会话规则）
+  // 下载由 offscreen 文档执行（offscreen.js：流式 fetch → Blob → downloads），
+  // 此处仅保留文件名清洗供消息处理器使用
   // ============================================================
   // 按路径段清洗（保留 "/" 作为 chrome.downloads 的子目录分隔符；
   // 非法字符为 Windows 集合，":" 在段内替换，段首尾空格点删除）
@@ -226,19 +227,5 @@
     }).join('/');
   }
 
-  async function download(url, filename) {
-    await ensureRefererRules();
-    // 正规 upos CDN 校验 Referer（实测无 Referer 403）；downloads API 支持自定义
-    // headers（Referer 非受限头），DNR 会话规则作为冗余兜底
-    return new Promise((resolve) => {
-      const start = (headers) => chrome.downloads.download({ url, filename: sanitizeName(filename), saveAs: false, headers }, (id) => {
-        const err = chrome.runtime.lastError;
-        if (err && headers) { start(undefined); return; }   // headers 被拒时退化为无自定义头重试
-        resolve({ ok: id !== undefined && !err, id, error: err?.message });
-      });
-      start([{ name: 'Referer', value: 'https://www.bilibili.com/' }]);
-    });
-  }
-
-  globalThis.BiliDownloader = { ensureInit: ensureRefererRules, getVideoInfo, resolveStreams, download, sanitizeName, BILI_QN_NAMES, BILI_AUDIO_NAMES };
+  globalThis.BiliDownloader = { ensureInit: ensureRefererRules, getVideoInfo, resolveStreams, sanitizeName, BILI_QN_NAMES, BILI_AUDIO_NAMES };
 })();

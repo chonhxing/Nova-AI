@@ -45,22 +45,25 @@ export default {
     currentPage() { return this.pages[this.pageIndex] || null; },
   },
     async mounted() {
-    // 下载状态跟踪（面板运行在隔离世界，可直接用 chrome.downloads 事件）
-    if (typeof chrome !== 'undefined' && chrome.downloads?.onChanged) {
-      const on = (delta) => {
-        const d = this.downloads.find(x => x.id === delta.id);
-        if (!d) return;
-        if (delta.bytesReceived) d.received = delta.bytesReceived.current;
-        if (delta.state) {
-          if (delta.state.current === 'complete') d.state = 'done';
-          else if (delta.state.current === 'interrupted') {
+    // 下载进度/结果由 offscreen 文档经 runtime 消息回传（fetch 流式 + Blob 落盘）
+    if (typeof chrome !== 'undefined' && chrome.runtime?.onMessage) {
+      const on = (msg) => {
+        if (msg?.type === 'BILI_DL_PROGRESS') {
+          const d = this.downloads.find(x => x.key === msg.key);
+          if (d) { d.received = msg.received || 0; if (msg.total) d.total = msg.total; }
+        } else if (msg?.type === 'BILI_DL_RESULT') {
+          const d = this.downloads.find(x => x.key === msg.key);
+          if (!d) return;
+          if (msg.ok) { d.state = 'done'; d.id = msg.id || null; }
+          else {
             d.state = 'error';
+            d.error = msg.error || '下载失败';
             if (!d.retried) this.retry(d);   // 自动重试一次（网络抖动）
           }
         }
       };
-      chrome.downloads.onChanged.addListener(on);
-      this._dlListeners.push([chrome.downloads.onChanged, on]);
+      chrome.runtime.onMessage.addListener(on);
+      this._dlListeners.push([chrome.runtime.onMessage, on]);
     }
     await this.load();
   },
@@ -106,32 +109,36 @@ export default {
       }
       this.resolving = false;
     },
-    async download(url, qualityLabel, kind, item = null) {
+    // 主选 + 备用线路依次尝试（主选 403/失效时自动换备用）
+    dlVideo(q) {
+      if (this.resolving || this.processing) return;
+      const v = this.res?.videos.find(x => x.id === q.id);
+      if (!v?.url) return;
+      this.download([v.url, ...v.backups], this.qnName(q.id), 'video');
+    },
+    dlAudio(a) {
+      const s = this.res?.audios.find(x => x.id === a.id);
+      if (!s?.url) return;
+      this.download([s.url, ...s.backups], this.audioName(a.id), 'audio');
+    },
+    async download(urls, qualityLabel, kind, item = null) {
       const page = this.currentPage;
-      if (!url || !this.info) return;
+      if (!urls?.length || !this.info) return;
       if (!item) {
         const base = `无极下载/${this.sanitize(this.info.title)}${this.pages.length > 1 ? ` [P${page.page}]` : ''}`;
         const name = kind === 'audio'
-          ? `${base} [${this.audioName(qualityLabel)}] 音频流.m4a`
+          ? `${base} [${qualityLabel}] 音频流.m4a`
           : `${base} [${qualityLabel}] 视频流.m4s`;
-        item = { key: name + Date.now(), id: null, name, state: 'running', received: 0, total: 0, retried: false, url, label: qualityLabel, kind, error: '' };
+        item = { key: name + Date.now(), id: null, name, state: 'running', received: 0, total: 0, retried: false, urls, label: qualityLabel, kind, error: '' };
         this.downloads.unshift(item);
       } else {
         item.state = 'running';
         item.error = '';
       }
       try {
-        const r = await this.bridge.send('BILI_DOWNLOAD', { url: item.url, filename: item.name });
-        item.id = r.id || null;
-        if (!r.ok) { item.state = 'error'; item.error = r.error || '下载任务创建失败'; return; }
-        // 总字节数（进度百分比用）
-        if (item.id && chrome.downloads?.search) {
-          chrome.downloads.search({ id: item.id }, (items) => {
-            if (chrome.runtime.lastError || !items?.[0]) return;
-            item.total = items[0].totalBytes || 0;
-            if (items[0].state === 'complete') item.state = 'done';
-          });
-        }
+        const r = await this.bridge.send('BILI_DOWNLOAD', { urls: item.urls, filename: item.name, key: item.key });
+        if (!r?.ok) { item.state = 'error'; item.error = r?.error || '下载任务创建失败'; return; }
+        // 进度/结果经 BILI_DL_PROGRESS / BILI_DL_RESULT 消息异步回传（offscreen 文档）
       } catch (e) {
         item.state = 'error';
         item.error = e.message;
@@ -193,7 +200,7 @@ export default {
               <div class="bili-row-name">{{ qnName(q.id) }}<span class="bili-codec">{{ q.codec }}</span></div>
               <div class="bili-row-meta">{{ q.width }}×{{ q.height }}<template v-if="q.size"> · 约 {{ fmtSize(q.size) }}</template></div>
             </div>
-            <button class="bili-dl" @click="download(q.id ? res.videos.find(v => v.id === q.id)?.url : '', qnName(q.id), 'video')">下载</button>
+            <button class="bili-dl" @click="dlVideo(q)">下载</button>
           </div>
 
           <div class="bili-sec">音频流</div>
@@ -202,7 +209,7 @@ export default {
               <div class="bili-row-name">{{ audioName(a.id) }}</div>
               <div class="bili-row-meta">{{ a.bandwidth ? (Math.round(a.bandwidth / 1000) + ' kbps') : '' }}</div>
             </div>
-            <button class="bili-dl" @click="download(a.url, audioName(a.id), 'audio')">下载</button>
+            <button class="bili-dl" @click="dlAudio(a)">下载</button>
           </div>
 
           <!-- 下载队列 -->
