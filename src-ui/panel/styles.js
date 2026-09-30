@@ -408,7 +408,11 @@ export const BILI_STYLES = `
   .bili-dl { padding: 5px 14px; border-radius: 6px; border: none; cursor: pointer; font-size: 11px; font-family: inherit; background: linear-gradient(135deg, #6366f1, #a855f7); color: #fff; flex-shrink: 0; transition: opacity 0.15s; }
   .bili-dl:hover { opacity: 0.88; }
   .bili-dl-row { display: flex; align-items: center; gap: 8px; padding: 5px 0; border-bottom: 1px solid rgba(255,255,255,0.04); }
-  .bili-dl-name { flex: 1; min-width: 0; font-size: 11px; color: #aaa; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .bili-dl-main { flex: 1; min-width: 0; }
+  .bili-dl-name { font-size: 11px; color: #aaa; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .bili-bar { height: 3px; border-radius: 2px; background: rgba(255,255,255,0.1); margin-top: 4px; overflow: hidden; }
+  .bili-bar-in { height: 100%; background: linear-gradient(135deg, #6366f1, #a855f7); transition: width 0.3s; }
+  .bili-dl-retry { background: rgba(255,255,255,0.12) !important; }
   .bili-dl-state { font-size: 11px; flex-shrink: 0; color: #888; }
   .bili-dl-state.done { color: #34d399; }
   .bili-dl-state.error { color: #f87171; }

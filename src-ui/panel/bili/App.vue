@@ -44,17 +44,20 @@ export default {
     pages() { return this.info?.pages || []; },
     currentPage() { return this.pages[this.pageIndex] || null; },
   },
-  async mounted() {
+    async mounted() {
     // 下载状态跟踪（面板运行在隔离世界，可直接用 chrome.downloads 事件）
     if (typeof chrome !== 'undefined' && chrome.downloads?.onChanged) {
       const on = (delta) => {
         const d = this.downloads.find(x => x.id === delta.id);
         if (!d) return;
+        if (delta.bytesReceived) d.received = delta.bytesReceived.current;
         if (delta.state) {
           if (delta.state.current === 'complete') d.state = 'done';
-          else if (delta.state.current === 'interrupted') d.state = 'error';
+          else if (delta.state.current === 'interrupted') {
+            d.state = 'error';
+            if (!d.retried) this.retry(d);   // 自动重试一次（网络抖动）
+          }
         }
-        if (delta.bytesReceived) d.received = delta.bytesReceived.current;
       };
       chrome.downloads.onChanged.addListener(on);
       this._dlListeners.push([chrome.downloads.onChanged, on]);
@@ -103,24 +106,46 @@ export default {
       }
       this.resolving = false;
     },
-    async download(url, qualityLabel, kind) {
+    async download(url, qualityLabel, kind, item = null) {
       const page = this.currentPage;
       if (!url || !this.info) return;
-      const base = `无极下载/${this.sanitize(this.info.title)}${this.pages.length > 1 ? ` [P${page.page}]` : ''}`;
-      const name = kind === 'audio'
-        ? `${base} [${this.audioName(qualityLabel)}] 音频流.m4a`
-        : `${base} [${qualityLabel}] 视频流.m4s`;
-      const key = name + Date.now();
-      const item = { key, id: null, name, state: 'running', received: 0 };
-      this.downloads.unshift(item);
+      if (!item) {
+        const base = `无极下载/${this.sanitize(this.info.title)}${this.pages.length > 1 ? ` [P${page.page}]` : ''}`;
+        const name = kind === 'audio'
+          ? `${base} [${this.audioName(qualityLabel)}] 音频流.m4a`
+          : `${base} [${qualityLabel}] 视频流.m4s`;
+        item = { key: name + Date.now(), id: null, name, state: 'running', received: 0, total: 0, retried: false, url, label: qualityLabel, kind, error: '' };
+        this.downloads.unshift(item);
+      } else {
+        item.state = 'running';
+        item.error = '';
+      }
       try {
-        const r = await this.bridge.send('BILI_DOWNLOAD', { url, filename: name });
+        const r = await this.bridge.send('BILI_DOWNLOAD', { url: item.url, filename: item.name });
         item.id = r.id || null;
-        if (!r.ok) { item.state = 'error'; item.error = r.error || '下载任务创建失败'; }
+        if (!r.ok) { item.state = 'error'; item.error = r.error || '下载任务创建失败'; return; }
+        // 总字节数（进度百分比用）
+        if (item.id && chrome.downloads?.search) {
+          chrome.downloads.search({ id: item.id }, (items) => {
+            if (chrome.runtime.lastError || !items?.[0]) return;
+            item.total = items[0].totalBytes || 0;
+            if (items[0].state === 'complete') item.state = 'done';
+          });
+        }
       } catch (e) {
         item.state = 'error';
         item.error = e.message;
       }
+    },
+    // 自动重试一次；手动按钮可无限重试（重新走一次 downloads 任务，URL 未过期）
+    retry(item, manual = false) {
+      if (!manual && item.retried) return;
+      item.retried = true;
+      this.download(item.url, item.label, item.kind, item);
+    },
+    percent(d) {
+      if (!d.total || d.state !== 'running') return null;
+      return Math.min(100, Math.round((d.received / d.total) * 100));
     },
     sanitize(name) {
       return String(name || '').replace(/[<>:"/\\|?*\x00-\x1f]/g, '_').replace(/^[\s.]+|[\s.]+$/g, '').trim() || '_';
@@ -184,10 +209,14 @@ export default {
           <template v-if="downloads.length">
             <div class="bili-sec">下载队列</div>
             <div v-for="d in downloads" :key="d.key" class="bili-dl-row">
-              <span class="bili-dl-name" :title="d.name">{{ d.name }}</span>
+              <div class="bili-dl-main">
+                <div class="bili-dl-name" :title="d.name">{{ d.name }}</div>
+                <div v-if="percent(d) !== null" class="bili-bar"><div class="bili-bar-in" :style="{ width: percent(d) + '%' }"></div></div>
+              </div>
               <span class="bili-dl-state" :class="d.state">
-                {{ d.state === 'done' ? '✓ 完成' : d.state === 'error' ? ('✗ ' + (d.error || '失败')) : (d.received ? fmtSize(d.received) : '进行中') }}
+                {{ d.state === 'done' ? '✓ 完成' : d.state === 'error' ? (d.retried ? '✗ 失败' : '重试中…') : (percent(d) !== null ? percent(d) + '%' : (d.received ? fmtSize(d.received) : '进行中')) }}
               </span>
+              <button v-if="d.state === 'error'" class="bili-dl bili-dl-retry" @click="retry(d, true)">重试</button>
             </div>
           </template>
 

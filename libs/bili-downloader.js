@@ -49,14 +49,18 @@
       await chrome.declarativeNetRequest.updateSessionRules({
         addRules: [
           {
+            // SW fetch 与 downloads API 发起的请求都没有标签页（tabId = -1），
+            // 用 tabIds 精确限定只影响扩展自身请求，不碰用户页面（之前用
+            // domainType:'thirdParty' 匹配不到无发起方的下载请求 → Referer
+            // 未注入 → 正规 CDN 校验 Referer 拒绝，403 错误页被当作文件保存）
             id: 9001, priority: 1,
             action: { type: 'modifyHeaders', requestHeaders: [{ header: 'Referer', operation: 'set', value: 'https://www.bilibili.com/' }] },
-            condition: { urlFilter: '||api.bilibili.com', resourceTypes: ['xmlhttprequest'], domainType: 'thirdParty' }
+            condition: { urlFilter: '||api.bilibili.com', resourceTypes: ['xmlhttprequest'], tabIds: [-1] }
           },
           {
             id: 9002, priority: 1,
             action: { type: 'modifyHeaders', requestHeaders: [{ header: 'Referer', operation: 'set', value: 'https://www.bilibili.com/' }] },
-            condition: { requestDomains: ['bilivideo.com', 'akamaized.net', 'hdslb.com'], resourceTypes: ['media', 'other', 'xmlhttprequest'], domainType: 'thirdParty' }
+            condition: { requestDomains: ['bilivideo.com', 'akamaized.net', 'hdslb.com'], resourceTypes: ['other', 'media', 'xmlhttprequest'], tabIds: [-1] }
           }
         ]
       });
