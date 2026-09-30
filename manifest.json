@@ -19,8 +19,7 @@
     "alarms",
     "webRequest",
     "debugger",
-    "downloads",
-    "offscreen"
+    "downloads"
   ],
   "host_permissions": [
     "<all_urls>"

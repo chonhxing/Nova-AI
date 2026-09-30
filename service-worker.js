@@ -263,7 +263,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.type === 'BILI_GET_INFO' && message.payload) { handleBiliGetInfo(message, sender, sendResponse); return true; }
   if (message.type === 'BILI_RESOLVE' && message.payload) { handleBiliResolve(message, sender, sendResponse); return true; }
   if (message.type === 'BILI_OPEN_PANEL') { handleBiliOpenPanel(sender, sendResponse); return true; }
-  if (message.type === 'BILI_DL_START' && message.payload) { handleBiliDlStart(message, sendResponse); return true; }
+  if (message.type === 'BILI_SAVE_BLOB' && message.payload) { handleBiliSaveBlob(message, sendResponse); return true; }
 
   return false;
 });
@@ -357,26 +357,17 @@ async function handleBiliOpenPanel(sender, sendResponse) {
   } catch (e) { sendResponse({ success: false, error: e.message }); }
 }
 
-// 面板流式下载的第一跳：确保 offscreen 落盘文档存在后转发 START
-// （缺失时面板的 CHUNK/END 会被静默吞掉——上一版卡 100% 无文件正是这个原因）
-async function handleBiliDlStart(message, sendResponse) {
+// 面板把拉好的 Blob（页面源 blob: URL）交给 downloads API 落盘
+// （内容脚本没有 downloads API；浏览器下载子系统可解析页面源 blob URL）
+async function handleBiliSaveBlob(message, sendResponse) {
   try {
-    const { key, filename } = message.payload || {};
-    if (!key || !filename) { sendResponse({ success: false, error: '参数缺失' }); return; }
-    await ensureBiliOffscreen();
-    await chrome.runtime.sendMessage({ target: 'offscreen', type: 'BILI_DL_START', key, filename });
-    sendResponse({ success: true });
+    const { blobUrl, filename } = message.payload || {};
+    if (!blobUrl || !filename) { sendResponse({ success: false, error: '参数缺失' }); return; }
+    chrome.downloads.download({ url: blobUrl, filename, saveAs: false }, (id) => {
+      const err = chrome.runtime.lastError;
+      sendResponse({ success: true, data: { ok: !err && id !== undefined, id, error: err?.message } });
+    });
   } catch (e) { sendResponse({ success: false, error: e.message }); }
-}
-
-async function ensureBiliOffscreen() {
-  const ctx = await chrome.runtime.getContexts({ contextTypes: ['OFFSCREEN_DOCUMENT'] });
-  if (ctx.length) return;
-  await chrome.offscreen.createDocument({
-    url: 'offscreen.html',
-    reasons: ['BLOBS'],
-    justification: 'B站视频下载落盘：分块写入 OPFS 后经 chrome.downloads 保存'
-  });
 }
 
 // ======== 各个消息处理器 ========

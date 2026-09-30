@@ -36,9 +36,8 @@ export default {
       pageIndex: 0,        // 当前分P索引
       res: null,           // resolve 结果 { qualities, audios, timelength }
       resolving: false,
-      downloads: [],       // { key, id, name, state, received, total, retried, urls, label, kind, error, startedAt }
+      downloads: [],       // { key, id, name, state: 'running'|'saving'|'done'|'error', received, total, retried, urls, label, kind, error, startedAt }
       now: Date.now(),     // 心跳：驱动"进行中"项的速度/耗时刷新
-      _dlListeners: [],
       _ticker: null,
     };
   },
@@ -47,34 +46,11 @@ export default {
     currentPage() { return this.pages[this.pageIndex] || null; },
   },
     async mounted() {
-    // 下载进度/结果由 offscreen 文档经 runtime 消息回传（fetch 流式 + Blob 落盘）
-    if (typeof chrome !== 'undefined' && chrome.runtime?.onMessage) {
-      const on = (msg) => {
-        if (msg?.type === 'BILI_DL_PROGRESS') {
-          const d = this.downloads.find(x => x.key === msg.key);
-          if (d) { d.received = msg.received || 0; if (msg.total) d.total = msg.total; }
-        } else if (msg?.type === 'BILI_DL_RESULT') {
-          const d = this.downloads.find(x => x.key === msg.key);
-          if (!d) return;
-          if (msg.ok) { d.state = 'done'; d.id = msg.id || null; }
-          else {
-            // offscreen 写盘失败的边缘错误只呈现，不自动重试
-            //（自动重试只走本地 fetchToDisk 的 catch 路径，避免与在途 fetch 双写）
-            d.state = 'error';
-            d.error = msg.error || '下载失败';
-          }
-        }
-      };
-      chrome.runtime.onMessage.addListener(on);
-      this._dlListeners.push([chrome.runtime.onMessage, on]);
-    }
     // 每秒心跳：驱动进行中项的速度/耗时刷新（Vue 响应式）
     this._ticker = setInterval(() => { this.now = Date.now(); }, 1000);
     await this.load();
   },
   beforeUnmount() {
-    for (const [ev, fn] of this._dlListeners) { try { ev.removeListener(fn); } catch (e) { /* ignore */ } }
-    this._dlListeners = [];
     if (this._ticker) { clearInterval(this._ticker); this._ticker = null; }
   },
   methods: {
@@ -149,11 +125,10 @@ export default {
         item.startedAt = Date.now();
       }
       try {
-        await this.fetchToDisk(item);   // 面板直 fetch（Referer 天然正确 + DNR 注 CORS 放行）→ 分块交 offscreen 写 OPFS → downloads
+        await this.fetchToDisk(item);   // 面板直 fetch（Referer 天然正确 + DNR 注 ACAO 放行）→ Blob → SW downloads 落盘
       } catch (e) {
         item.state = 'error';
         item.error = e.message;
-        chrome.runtime.sendMessage({ target: 'offscreen', type: 'BILI_DL_ABORT', key: item.key }).catch(() => {});
         if (!item.retried) this.retry(item);
       }
     },
@@ -162,10 +137,7 @@ export default {
       let lastErr = '';
       for (const url of item.urls) {
         try { await this.fetchOne(url, item); return; }
-        catch (e) {
-          lastErr = e.message;
-          chrome.runtime.sendMessage({ target: 'offscreen', type: 'BILI_DL_ABORT', key: item.key }).catch(() => {});
-        }
+        catch (e) { lastErr = e.message; }
       }
       throw new Error(lastErr || '全部线路均失败');
     },
@@ -175,40 +147,34 @@ export default {
       const resp = await fetch(url, { credentials: 'omit' });
       if (!resp.ok) throw new Error('CDN HTTP ' + resp.status);
       if (resp.headers.get('content-length')) item.total = Number(resp.headers.get('content-length'));
-      // 第一跳经 SW：确保 offscreen 落盘文档存在（创建失败在这里抛错，不再静默吞数据）
-      await this.bridge.send('BILI_DL_START', { key: item.key, filename: item.name });
-      const direct = (type, extra) => new Promise((resolve, reject) => {
-        chrome.runtime.sendMessage({ target: 'offscreen', type, key: item.key, ...extra }, (r) => {
-          const err = chrome.runtime.lastError;
-          if (err) reject(new Error(err.message)); else resolve(r);
-        });
-      });
       const reader = resp.body.getReader();
-      let received = 0, batch = [], batchLen = 0, lastB = 0, lastT = Date.now(), miss = 0;
+      const chunks = [];
+      let received = 0, lastB = 0, lastT = Date.now();
       while (true) {
         const { done, value } = await reader.read();
         if (done) break;
-        batch.push(value);
-        batchLen += value.length;
+        chunks.push(value);
         received += value.length;
         item.received = received;
-        if (batchLen >= 4194304) {   // 4MB 一块，结构化克隆发给 offscreen 落盘
-          const buf = new Uint8Array(batchLen);
-          let off = 0;
-          for (const b of batch) { buf.set(b, off); off += b.length; }
-          try { await direct('BILI_DL_CHUNK', { chunk: buf.buffer, received }); miss = 0; }
-          catch (e) { if (++miss >= 3) throw new Error('落盘通道中断: ' + e.message); }
-          batch = []; batchLen = 0;
-        }
         if (received - lastB >= 1048576 || Date.now() - lastT >= 500) { lastB = received; lastT = Date.now(); }
       }
-      if (batchLen) {
-        const buf = new Uint8Array(batchLen);
-        let off = 0;
-        for (const b of batch) { buf.set(b, off); off += b.length; }
-        await direct('BILI_DL_CHUNK', { chunk: buf.buffer, received });
+      if (received === 0) throw new Error('下载内容为空');
+      item.received = received;
+      item.state = 'saving';
+      // Blob URL（页面源）交给 SW 的 chrome.downloads 落盘——内容脚本没有 downloads API，
+      // 但浏览器下载子系统可以解析页面源 blob URL（内容脚本下载的标准模式）
+      const blob = new Blob(chunks, { type: item.kind === 'audio' ? 'audio/mp4' : 'video/mp4' });
+      const objUrl = URL.createObjectURL(blob);
+      try {
+        const r = await this.bridge.send('BILI_SAVE_BLOB', { blobUrl: objUrl, filename: item.name });
+        if (!r?.ok) throw new Error(r?.error || '保存失败');
+        item.id = r.id || null;
+        item.state = 'done';
+        setTimeout(() => URL.revokeObjectURL(objUrl), 600000);   // 下载器落盘可能较慢，延迟回收
+      } catch (e) {
+        URL.revokeObjectURL(objUrl);
+        throw e;
       }
-      await direct('BILI_DL_END', { filename: item.name });   // 送达失败会在这里抛出（不再卡 100%）
     },
     // 自动重试一次；手动按钮可无限重试（重新走一次 downloads 任务，URL 未过期）
     retry(item, manual = false) {
@@ -297,7 +263,7 @@ export default {
                 <div v-if="percent(d) !== null" class="bili-bar"><div class="bili-bar-in" :style="{ width: percent(d) + '%' }"></div></div>
               </div>
               <span class="bili-dl-state" :class="d.state">
-                {{ d.state === 'done' ? '✓ 完成' : d.state === 'error' ? (d.retried ? '✗ 失败' : '重试中…') : runningText(d) }}
+                {{ d.state === 'done' ? '✓ 完成' : d.state === 'saving' ? '保存中…' : d.state === 'error' ? (d.retried ? '✗ 失败' : '重试中…') : runningText(d) }}
               </span>
               <button v-if="d.state === 'error'" class="bili-dl bili-dl-retry" @click="retry(d, true)">重试</button>
             </div>
