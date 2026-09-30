@@ -58,9 +58,10 @@ export default {
           if (!d) return;
           if (msg.ok) { d.state = 'done'; d.id = msg.id || null; }
           else {
+            // offscreen 写盘失败的边缘错误只呈现，不自动重试
+            //（自动重试只走本地 fetchToDisk 的 catch 路径，避免与在途 fetch 双写）
             d.state = 'error';
             d.error = msg.error || '下载失败';
-            if (!d.retried) this.retry(d);   // 自动重试一次（网络抖动）
           }
         }
       };
@@ -148,13 +149,59 @@ export default {
         item.startedAt = Date.now();
       }
       try {
-        const r = await this.bridge.send('BILI_DOWNLOAD', { urls: item.urls, filename: item.name, key: item.key });
-        if (!r?.ok) { item.state = 'error'; item.error = r?.error || '下载任务创建失败'; return; }
-        // 进度/结果经 BILI_DL_PROGRESS / BILI_DL_RESULT 消息异步回传（offscreen 文档）
+        await this.fetchToDisk(item);   // 面板直 fetch（Referer 天然正确 + DNR 注 CORS 放行）→ 分块交 offscreen 写 OPFS → downloads
       } catch (e) {
         item.state = 'error';
         item.error = e.message;
+        chrome.runtime.sendMessage({ target: 'offscreen', type: 'BILI_DL_ABORT', key: item.key }).catch(() => {});
+        if (!item.retried) this.retry(item);
       }
+    },
+    // 多线路依次尝试
+    async fetchToDisk(item) {
+      let lastErr = '';
+      for (const url of item.urls) {
+        try { await this.fetchOne(url, item); return; }
+        catch (e) {
+          lastErr = e.message;
+          chrome.runtime.sendMessage({ target: 'offscreen', type: 'BILI_DL_ABORT', key: item.key }).catch(() => {});
+        }
+      }
+      throw new Error(lastErr || '全部线路均失败');
+    },
+    // 同页面 fetch：Referer 天然为 B 站页面（CDN 认可），DNR 注入 ACAO 放行 CORS；
+    // 进度即本地响应式状态（不经过任何消息中转，不会丢）
+    async fetchOne(url, item) {
+      const resp = await fetch(url, { credentials: 'omit' });
+      if (!resp.ok) throw new Error('CDN HTTP ' + resp.status);
+      if (resp.headers.get('content-length')) item.total = Number(resp.headers.get('content-length'));
+      const send = (type, extra) => chrome.runtime.sendMessage({ target: 'offscreen', type, key: item.key, ...extra }).catch(() => {});
+      await send('BILI_DL_START', { filename: item.name });
+      const reader = resp.body.getReader();
+      let received = 0, batch = [], batchLen = 0, lastB = 0, lastT = Date.now();
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        batch.push(value);
+        batchLen += value.length;
+        received += value.length;
+        item.received = received;
+        if (batchLen >= 4194304) {   // 4MB 一块，结构化克隆发给 offscreen 落盘
+          const buf = new Uint8Array(batchLen);
+          let off = 0;
+          for (const b of batch) { buf.set(b, off); off += b.length; }
+          await send('BILI_DL_CHUNK', { chunk: buf.buffer, received });
+          batch = []; batchLen = 0;
+        }
+        if (received - lastB >= 1048576 || Date.now() - lastT >= 500) { lastB = received; lastT = Date.now(); }
+      }
+      if (batchLen) {
+        const buf = new Uint8Array(batchLen);
+        let off = 0;
+        for (const b of batch) { buf.set(b, off); off += b.length; }
+        await send('BILI_DL_CHUNK', { chunk: buf.buffer, received });
+      }
+      await send('BILI_DL_END', { filename: item.name });
     },
     // 自动重试一次；手动按钮可无限重试（重新走一次 downloads 任务，URL 未过期）
     retry(item, manual = false) {

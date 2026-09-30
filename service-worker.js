@@ -262,7 +262,6 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   // ======== B 站视频下载（引擎：libs/bili-downloader.js，算法移植自 Bili23）========
   if (message.type === 'BILI_GET_INFO' && message.payload) { handleBiliGetInfo(message, sender, sendResponse); return true; }
   if (message.type === 'BILI_RESOLVE' && message.payload) { handleBiliResolve(message, sender, sendResponse); return true; }
-  if (message.type === 'BILI_DOWNLOAD' && message.payload) { handleBiliDownload(message, sender, sendResponse); return true; }
   if (message.type === 'BILI_OPEN_PANEL') { handleBiliOpenPanel(sender, sendResponse); return true; }
 
   return false;
@@ -340,30 +339,6 @@ async function handleBiliGetInfo(message, sender, sendResponse) {
 async function handleBiliResolve(message, sender, sendResponse) {
   try { sendResponse({ success: true, data: await BiliDownloader.resolveStreams(message.payload || {}) }); }
   catch (e) { sendResponse({ success: false, error: e.message }); }
-}
-
-async function handleBiliDownload(message, sender, sendResponse) {
-  try {
-    const { urls, filename, key } = message.payload || {};
-    if (!urls?.length) { sendResponse({ success: false, error: '缺少下载地址' }); return; }
-    await ensureBiliOffscreen();
-    // 交给 offscreen 文档流式 fetch（Referer 由 DNR 会话规则注入）→ Blob → downloads；
-    // 多候选 URL 依次尝试；进度/结果经 BILI_DL_PROGRESS / BILI_DL_RESULT 消息回传面板
-    chrome.runtime.sendMessage({ target: 'offscreen', type: 'BILI_FETCH_DOWNLOAD', urls, filename, key }).catch((e) => {
-      console.warn('[无极B站] offscreen 转发失败:', e.message);
-    });
-    sendResponse({ success: true, data: { ok: true, key } });
-  } catch (e) { sendResponse({ success: false, error: e.message }); }
-}
-
-async function ensureBiliOffscreen() {
-  const ctx = await chrome.runtime.getContexts({ contextTypes: ['OFFSCREEN_DOCUMENT'] });
-  if (ctx.length) return;
-  await chrome.offscreen.createDocument({
-    url: 'offscreen.html',
-    reasons: ['BLOBS'],
-    justification: 'B站视频流下载：fetch 拉流攒 Blob 后经 chrome.downloads 落盘'
-  });
 }
 
 // 面板中继：B站视频页悬浮入口发 runtime 消息，SW 注入面板 UI 后转发
